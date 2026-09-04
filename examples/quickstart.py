@@ -73,7 +73,7 @@ def main() -> None:
         use_case = client.use_case(USE_CASE)
         print(
             f"loaded {USE_CASE}: model={use_case.model} "
-            f"revision={use_case.deployment_revision} prompt={use_case.prompt} "
+            f"revision={use_case.deployment['revision']} prompt={use_case.prompt} "
             f"source={use_case.source}"
         )
         print("prompts pinned by the live revision:", client.prompt_names(USE_CASE))
