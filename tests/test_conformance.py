@@ -1,7 +1,7 @@
 """The cross-language conformance suite, replayed through this SDK.
 
 ``tests/conformance/*.json`` is copied verbatim from the reference implementation. When two SDKs
-disagree about how a prompt renders, which model a snapshot resolves to, or how a monitoring log is
+disagree about how a prompt renders, which model a use-case document selects, or how a monitoring log is
 truncated, an app that talks to PromptOn from two languages gets two different answers. These cases
 are what prevents that, so every one of them runs.
 """
@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from prompton import PromptOn, generation, payload, resolver, stop_kind, template
+from prompton import PromptOn, UseCase, generation, payload, resolver, stop_kind, template
 from prompton.errors import (
     MissingVariableError,
     ProviderError,
@@ -22,19 +22,19 @@ from prompton.errors import (
     UnknownUseCaseError,
     UnresolvedError,
 )
-from prompton.generation import CallMeta, Outcome, build_record
-from prompton.snapshot_data import SnapshotData
+from prompton.generation import CallMeta, Result, build_record
+from prompton.snapshot_data import UseCaseDocument
 
 from .conftest import load_conformance
 
 TEMPLATE = load_conformance("template")
-RESOLVE = load_conformance("resolve")
+RESOLVE = load_conformance("use_case")
 TRUNCATION = load_conformance("truncation")
 STOP_KIND = load_conformance("stop_kind")
-GENERATION_RECORD = load_conformance("generation_record")
+GENERATION_RECORD = load_conformance("log_record")
 
 
-def _render_outcome(case: dict[str, Any]) -> dict[str, Any]:
+def _render_result(case: dict[str, Any]) -> dict[str, Any]:
     try:
         return {"output": template.render(case["template"], case["variables"], case["engine"])}
     except MissingVariableError as error:
@@ -61,7 +61,7 @@ NON_NORMATIVE: dict[str, dict[str, Any]] = {
 
 @pytest.mark.parametrize("case", TEMPLATE["cases"], ids=lambda c: c["name"])
 def test_template_render(case: dict[str, Any]) -> None:
-    got = _render_outcome(case)
+    got = _render_result(case)
     if case.get("normative", True):
         assert got == case["expect"], case.get("note", "")
     else:
@@ -93,25 +93,28 @@ def test_template_allowed_sets_match_the_contract() -> None:
     assert sorted(template.ALLOWED_FILTERS) == sorted(TEMPLATE["allowed_filters"])
 
 
-SNAPSHOTS = {name: SnapshotData.from_mapping(doc) for name, doc in RESOLVE["snapshots"].items()}
+SNAPSHOTS = {name: UseCaseDocument.from_mapping(doc) for name, doc in RESOLVE["documents"].items()}
 
 
-def _resolve_outcome(case: dict[str, Any]) -> dict[str, Any]:
-    snapshot = SNAPSHOTS[case["snapshot_ref"]]
+def _lookup_result(case: dict[str, Any]) -> dict[str, Any]:
+    snapshot = SNAPSHOTS[case["document_ref"]]
     try:
         resolution = resolver.resolve(snapshot, case["use_case"], case.get("prompt"))
-    except UnknownUseCaseError:
-        return {"error": "unknown_use_case"}
+    except UnknownUseCaseError as error:
+        return {"error": "unknown_use_case", "key": error.use_case}
     except UnresolvedError:
         return {"error": "unresolved"}
     except UnknownPromptError as error:
         return {
             "error": "unknown_prompt",
+            "key": error.use_case,
             "prompt": error.prompt,
-            "available_prompts": error.available_prompts,
+            "prompt_names": error.prompt_names,
         }
 
     got: dict[str, Any] = {
+        "key": resolution.use_case,
+        "source": resolution.source,
         "kind": resolution.kind,
         "deployment_id": resolution.deployment_id,
         "revision": resolution.deployment_revision,
@@ -119,10 +122,10 @@ def _resolve_outcome(case: dict[str, Any]) -> dict[str, Any]:
         "model_id": resolution.model_id,
         "provider": resolution.provider,
         "prompt": resolution.prompt,
-        "prompts": list(resolution.available_prompts),
+        "prompt_names": list(resolution.prompt_names),
         "prompt_version": resolution.prompt_version,
-        "effective_params": resolution.effective_params,
-        "effective_provider_options": resolution.effective_provider_options,
+        "params": resolution.params,
+        "provider_options": resolution.provider_options,
         "warnings": list(resolution.warnings),
     }
     variables = case.get("variables")
@@ -146,18 +149,18 @@ def _resolve_outcome(case: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.mark.parametrize("case", RESOLVE["cases"], ids=lambda c: c["name"])
 def test_resolve(case: dict[str, Any]) -> None:
-    assert _resolve_outcome(case) == case["expect"], case.get("note", "")
+    assert _lookup_result(case) == case["expect"], case.get("note", "")
 
 
 @pytest.mark.parametrize("case", TRUNCATION["cases"], ids=lambda c: c["name"])
 def test_truncation(case: dict[str, Any]) -> None:
     config = case.get("config") or {}
     got = payload.apply_policy(
-        case["generation"],
+        case["log"],
         case["policy"],
         hash_end_user=bool(config.get("hash_end_user")),
     )
-    assert got == case["expect"]["generation"], case.get("note", "")
+    assert got == case["expect"]["log"], case.get("note", "")
 
 
 @pytest.mark.parametrize("case", TRUNCATION["sampling"]["buckets"], ids=lambda c: repr(c["id"]))
@@ -182,7 +185,7 @@ def _golden(name: str) -> dict[str, Any]:
     raise AssertionError(f"no golden record named {name}")
 
 
-def test_generation_record_shape_matches_the_golden_chat_success() -> None:
+def test_log_record_shape_matches_the_golden_chat_success() -> None:
     """Rebuild the golden ``chat/success`` record and compare it field for field."""
     golden = _golden("chat/success")
     resolution = resolver.Resolution(
@@ -197,8 +200,8 @@ def test_generation_record_shape_matches_the_golden_chat_success() -> None:
         model_id=None,
         model=golden["model"],
         provider=golden["provider"],
-        effective_params=golden["params"],
-        resolution_source="remote",
+        params=golden["params"],
+        source="remote",
     )
     record = build_record(
         resolution,
@@ -215,7 +218,7 @@ def test_generation_record_shape_matches_the_golden_chat_success() -> None:
         status="ok",
         started_at=golden["started_at"],
         latency_ms=golden["latency_ms"],
-        outcome=Outcome(
+        result=Result(
             content=golden["output"]["content"],
             finish_reason=golden["finish_reason"],
             input_tokens=golden["usage"]["input_tokens"],
@@ -229,12 +232,12 @@ def test_generation_record_shape_matches_the_golden_chat_success() -> None:
         ),
     )
     # The SDK name is this package's, not the reference implementation's.
-    assert record.pop("sdk") == {"name": "prompton-python", "version": "0.1.0"}
+    assert record.pop("sdk") == {"name": "prompton-python", "version": "0.2.0"}
     expected = {key: value for key, value in golden.items() if key != "sdk"}
     assert record == expected
 
 
-def test_generation_record_error_without_output() -> None:
+def test_log_record_error_without_output() -> None:
     golden = _golden("chat/error_without_output")
     resolution = resolver.Resolution(
         use_case="greeting",
@@ -248,8 +251,8 @@ def test_generation_record_error_without_output() -> None:
         model_id=None,
         model=golden["model"],
         provider=golden["provider"],
-        effective_params=golden["params"],
-        resolution_source="remote",
+        params=golden["params"],
+        source="remote",
     )
     record = build_record(
         resolution,
@@ -270,7 +273,7 @@ def test_generation_record_error_without_output() -> None:
     assert "output" not in record
 
 
-def test_generation_record_error_with_usage_preserved() -> None:
+def test_log_record_error_with_usage_preserved() -> None:
     """A parse failure after the provider answered: the usage and the text are kept."""
     golden = _golden("chat/error_with_usage_preserved")
     resolution = resolver.Resolution(
@@ -285,8 +288,8 @@ def test_generation_record_error_with_usage_preserved() -> None:
         model_id=None,
         model=golden["model"],
         provider=golden["provider"],
-        effective_params=golden["params"],
-        resolution_source="remote",
+        params=golden["params"],
+        source="remote",
     )
     record = build_record(
         resolution,
@@ -299,7 +302,7 @@ def test_generation_record_error_with_usage_preserved() -> None:
         status="error",
         started_at=golden["started_at"],
         latency_ms=golden["latency_ms"],
-        outcome=Outcome(
+        result=Result(
             content=golden["output"]["content"],
             finish_reason=golden["finish_reason"],
             input_tokens=golden["usage"]["input_tokens"],
@@ -313,7 +316,7 @@ def test_generation_record_error_with_usage_preserved() -> None:
     assert record == {key: value for key, value in golden.items() if key != "sdk"}
 
 
-def test_generation_record_embedding_success() -> None:
+def test_log_record_embedding_success() -> None:
     """An embedding use case: no prompt, no prompt version, no output."""
     golden = _golden("embedding/success")
     resolution = resolver.Resolution(
@@ -328,8 +331,8 @@ def test_generation_record_embedding_success() -> None:
         model_id=None,
         model=golden["model"],
         provider=golden["provider"],
-        effective_params=golden["params"],
-        resolution_source="disk",
+        params=golden["params"],
+        source="disk",
     )
     record = build_record(
         resolution,
@@ -342,7 +345,7 @@ def test_generation_record_embedding_success() -> None:
         status="ok",
         started_at=golden["started_at"],
         latency_ms=golden["latency_ms"],
-        outcome=Outcome(
+        result=Result(
             input_tokens=golden["usage"]["input_tokens"],
             output_tokens=golden["usage"]["output_tokens"],
             cost_usd=golden["usage"]["cost_usd"],
@@ -354,7 +357,7 @@ def test_generation_record_embedding_success() -> None:
     assert "prompt" not in record and "output" not in record
 
 
-def test_generation_record_manual_log_with_input_text() -> None:
+def test_log_record_manual_log_with_input_text() -> None:
     """The hand-built record: ``log()`` fills in the evidence and touches nothing else."""
     golden = _golden("text/manual_log_with_input_text")
     resolution = resolver.Resolution(
@@ -369,9 +372,10 @@ def test_generation_record_manual_log_with_input_text() -> None:
         model_id=golden["model_id"],
         model=golden["model"],
         provider=golden["provider"],
-        resolution_source="bundle",
+        source="bundle",
     )
     with PromptOn(mode="test", api_key=None) as client:
+        use_case = UseCase(client, resolution)
         client.log(
             {
                 "id": golden["id"],
@@ -384,14 +388,14 @@ def test_generation_record_manual_log_with_input_text() -> None:
                 "latency_ms": golden["latency_ms"],
                 "usage": golden["usage"],
             },
-            resolution=resolution,
+            use_case=use_case,
         )
         [record] = client.captured
     record.pop("sdk")
     assert record == {key: value for key, value in golden.items() if key != "sdk"}
 
 
-def test_generation_record_required_fields_are_present() -> None:
+def test_log_record_required_fields_are_present() -> None:
     required = GENERATION_RECORD["field_rules"]["required"]
     assert sorted(generation.REQUIRED_FIELDS) == sorted(required)
     for entry in GENERATION_RECORD["records"]:
@@ -401,5 +405,5 @@ def test_generation_record_required_fields_are_present() -> None:
 
 def test_batch_envelope_shape() -> None:
     envelope = GENERATION_RECORD["batch_envelope"]["request"]
-    assert list(envelope) == ["generations"]
-    assert len(envelope["generations"]) == len(GENERATION_RECORD["records"])
+    assert list(envelope) == ["logs"]
+    assert len(envelope["logs"]) == len(GENERATION_RECORD["records"])

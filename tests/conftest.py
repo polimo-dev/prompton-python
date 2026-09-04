@@ -11,7 +11,7 @@ import pytest
 
 from prompton.errors import TransportError
 from prompton.http import HttpResponse
-from prompton.testing import make_snapshot
+from prompton.testing import make_use_case_document
 
 CONFORMANCE = Path(__file__).parent / "conformance"
 
@@ -63,22 +63,22 @@ class FakeTransport:
         }
         with self.lock:
             self.requests.append(call)
-            outcome = self.responses.pop(0) if self.responses else None
-        if outcome is None and self.handler is not None:
-            outcome = self.handler(call)
-        if outcome is None:
+            result = self.responses.pop(0) if self.responses else None
+        if result is None and self.handler is not None:
+            result = self.handler(call)
+        if result is None:
             raise AssertionError(f"FakeTransport has no response for {method} {url}")
-        if isinstance(outcome, BaseException):
-            raise outcome
-        return outcome
+        if isinstance(result, BaseException):
+            raise result
+        return result
 
     @property
     def snapshot_requests(self) -> list[dict[str, Any]]:
-        return [call for call in self.requests if "/snapshot" in call["url"]]
+        return [call for call in self.requests if "/use-cases" in call["url"]]
 
     @property
     def generation_requests(self) -> list[dict[str, Any]]:
-        return [call for call in self.requests if "/generations" in call["url"]]
+        return [call for call in self.requests if "/logs" in call["url"]]
 
 
 def json_response(status: int, body: Any, **headers: str) -> HttpResponse:
@@ -95,7 +95,7 @@ def transport_error() -> TransportError:
 
 @pytest.fixture
 def snapshot_document() -> dict[str, Any]:
-    return make_snapshot(
+    return make_use_case_document(
         project="sdkfixture",
         environment="production",
         greeting={

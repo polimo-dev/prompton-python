@@ -8,10 +8,10 @@ import time
 import pytest
 
 from prompton.config import Config
-from prompton.errors import APIError, SnapshotUnavailableError
+from prompton.errors import APIError, UseCaseDocumentUnavailableError
 from prompton.http import HttpResponse
 from prompton.store import SnapshotStore
-from prompton.testing import make_snapshot
+from prompton.testing import make_use_case_document
 
 from .conftest import FakeTransport, json_response, transport_error
 
@@ -28,7 +28,7 @@ def snapshot_ok(document: dict, etag: str = ETAG) -> HttpResponse:
 
 @pytest.fixture
 def document() -> dict:
-    return make_snapshot(
+    return make_use_case_document(
         project="demo",
         environment="production",
         greeting={"messages": [{"role": "user", "content": "hi"}]},
@@ -231,13 +231,13 @@ class TestServerDown:
         transport.push(transport_error())
         store = build(tmp_path, transport)
         store.start()
-        with pytest.raises(SnapshotUnavailableError) as error:
+        with pytest.raises(UseCaseDocumentUnavailableError) as error:
             store.current()
         assert "unreachable" in str(error.value)
         assert "nothing is cached" in str(error.value)
 
     def test_a_corrupt_or_partial_file_is_ignored_not_raised(self, tmp_path, document):
-        (tmp_path / "snapshot.json").write_text('{"schema_version": 3, "use_ca')
+        (tmp_path / "snapshot.json").write_text('{"schema_version": 4, "use_ca')
         transport = FakeTransport()
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
@@ -289,7 +289,7 @@ class TestScopeGuard:
         transport.push(transport_error())
         store = build(tmp_path, transport, environment="production")
         store.start()
-        with pytest.raises(SnapshotUnavailableError):
+        with pytest.raises(UseCaseDocumentUnavailableError):
             store.current()
 
     def test_a_snapshot_for_another_project_is_never_used(self, tmp_path, document):
@@ -299,7 +299,7 @@ class TestScopeGuard:
         transport.push(transport_error())
         store = build(tmp_path, transport)
         store.start()
-        with pytest.raises(SnapshotUnavailableError):
+        with pytest.raises(UseCaseDocumentUnavailableError):
             store.current()
 
     def test_a_healthy_server_with_the_wrong_project_says_so(self, tmp_path, document):
@@ -310,7 +310,7 @@ class TestScopeGuard:
         store = build(tmp_path, transport, project="otherproj", disk_cache=False)
         store.start()
 
-        with pytest.raises(SnapshotUnavailableError) as error:
+        with pytest.raises(UseCaseDocumentUnavailableError) as error:
             store.current()
         message = str(error.value)
         assert "unreachable" not in message
@@ -324,7 +324,7 @@ class TestScopeGuard:
         store = build(tmp_path, transport, environment="production", disk_cache=False)
         store.start()
 
-        with pytest.raises(SnapshotUnavailableError) as error:
+        with pytest.raises(UseCaseDocumentUnavailableError) as error:
             store.current()
         assert "'staging'" in str(error.value) and "'production'" in str(error.value)
 
@@ -410,7 +410,7 @@ class TestModes:
         transport = FakeTransport()
         store = SnapshotStore(config, transport)
         store.start()
-        with pytest.raises(SnapshotUnavailableError, match="load_snapshot"):
+        with pytest.raises(UseCaseDocumentUnavailableError, match="load_use_cases"):
             store.current()
         assert transport.requests == []
 

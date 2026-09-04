@@ -1,7 +1,7 @@
 """Local resolution: snapshot + use case key (+ prompt name) into a :class:`Resolution`.
 
 A pure function over a decoded snapshot, and the same algorithm the server runs behind
-``POST /resolve``::
+the prompt endpoint::
 
     deployment       = snapshot.deployments[use_case]      # absent -> unresolved, not a fallback
     version          = snapshot.prompt_versions[deployment.prompt_pins[prompt or "default"]]
@@ -20,9 +20,9 @@ from typing import Any, Literal
 
 from .errors import UnknownPromptError, UnknownUseCaseError, UnresolvedError
 from .params import merge
-from .snapshot_data import PayloadPolicy, SnapshotData
+from .snapshot_data import PayloadPolicy, UseCaseDocument
 
-__all__ = ["DEFAULT_PROMPT", "Resolution", "prompt_names", "resolve"]
+__all__ = ["DEFAULT_PROMPT", "prompt_names"]
 
 DEFAULT_PROMPT = "default"
 
@@ -33,9 +33,9 @@ ResolutionSource = Literal["remote", "disk", "bundle", "manual"]
 class Resolution:
     """What to use for this call: the model, the params and the prompt, plus the evidence.
 
-    Hand ``model``, ``effective_params``, ``effective_provider_options`` and the rendered messages
-    to your provider client; hand the whole object to :meth:`prompton.PromptOn.with_generation` so
-    the monitoring log records which deployment revision and prompt version produced the call.
+    Hand ``model``, ``params``, ``provider_options`` and the rendered messages to your provider
+    client; hand the whole object to PromptOn's tracking helpers so the monitoring log records
+    which deployment revision and prompt version produced the call.
     """
 
     use_case: str
@@ -49,14 +49,14 @@ class Resolution:
     model_id: str | None
     model: str | None
     provider: str | None
-    effective_params: dict[str, Any] = field(default_factory=dict)
-    effective_provider_options: dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
+    provider_options: dict[str, Any] = field(default_factory=dict)
     messages: tuple[dict[str, Any], ...] | None = None
     text_template: str | None = None
     available_prompts: tuple[str, ...] = ()
     input_schema: tuple[Any, ...] = ()
     payload_policy: PayloadPolicy | None = None
-    resolution_source: ResolutionSource = "remote"
+    source: ResolutionSource = "remote"
     etag: str | None = None
     warnings: tuple[str, ...] = ()
 
@@ -67,13 +67,28 @@ class Resolution:
             return None
         return {"id": self.prompt_version_id, "number": self.prompt_version_number}
 
+    @property
+    def key(self) -> str:
+        """The use case key."""
+        return self.use_case
+
+    @property
+    def deployment(self) -> dict[str, Any]:
+        """``{"id", "revision"}`` of the deployment that produced this resolution."""
+        return {"id": self.deployment_id, "revision": self.deployment_revision}
+
+    @property
+    def prompt_names(self) -> tuple[str, ...]:
+        """Prompt names pinned by this deployment."""
+        return self.available_prompts
+
 
 def resolve(
-    snapshot: SnapshotData,
+    snapshot: UseCaseDocument,
     use_case: str,
     prompt: str | None = None,
     *,
-    resolution_source: ResolutionSource = "remote",
+    source: ResolutionSource = "remote",
     etag: str | None = None,
 ) -> Resolution:
     """Resolve one use case. Raises the contract's three resolution errors."""
@@ -126,8 +141,8 @@ def resolve(
         model_id=model.id if model else None,
         model=model.model_id if model else None,
         provider=model.provider if model else None,
-        effective_params=merge(entry.default_params, deployment.params),
-        effective_provider_options=merge(
+        params=merge(entry.default_params, deployment.params),
+        provider_options=merge(
             model.provider_options if model else None, deployment.provider_options
         ),
         messages=messages,
@@ -135,13 +150,13 @@ def resolve(
         available_prompts=available,
         input_schema=entry.input_schema,
         payload_policy=entry.payload_policy,
-        resolution_source=resolution_source,
+        source=source,
         etag=etag,
         warnings=tuple(warnings),
     )
 
 
-def prompt_names(snapshot: SnapshotData, use_case: str) -> list[str]:
+def prompt_names(snapshot: UseCaseDocument, use_case: str) -> list[str]:
     """The prompt names this use case's live deployment pins, sorted. ``[]`` when undeployed."""
     if use_case not in snapshot.use_cases:
         raise UnknownUseCaseError(use_case)

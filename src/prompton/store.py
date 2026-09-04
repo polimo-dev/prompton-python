@@ -3,7 +3,7 @@
 Memory is always the fast path. Disk is on by default, written atomically, and shared safely by
 several processes on one host. A bundle - a snapshot JSON committed inside the app - is the
 last resort. Load order on start is **memory, disk, bundle, remote**, and the tier that answered
-is reported as ``resolution_source``.
+is reported as ``source``.
 
 The caching rules this file implements, in one place because they are the whole resilience story:
 
@@ -33,7 +33,7 @@ from typing import Any, Literal
 
 from . import _fork
 from .config import Config
-from .errors import PromptOnError, SnapshotUnavailableError, TransportError
+from .errors import PromptOnError, TransportError, UseCaseDocumentUnavailableError
 from .http import (
     HttpResponse,
     Transport,
@@ -42,7 +42,7 @@ from .http import (
     retry_after_seconds,
     urlencode,
 )
-from .snapshot_data import SnapshotData
+from .snapshot_data import UseCaseDocument
 
 __all__ = ["SnapshotEntry", "SnapshotStore"]
 
@@ -55,7 +55,7 @@ Source = Literal["remote", "disk", "bundle", "manual"]
 class SnapshotEntry:
     """One cached snapshot document plus where it came from and how fresh it is."""
 
-    data: SnapshotData
+    data: UseCaseDocument
     raw: bytes
     source: Source
     etag: str | None = None
@@ -95,7 +95,7 @@ class SnapshotStore:
     def start(self) -> None:
         """Load the local tiers, then start polling when polling is enabled."""
         if self._config.mode == "test":
-            # test mode is deterministic: only load_snapshot() puts a document here
+            # test mode is deterministic: only load_use_cases() puts a document here
             return
         self.load_local()
         if not self._config.remote_enabled:
@@ -110,7 +110,7 @@ class SnapshotStore:
             return
         _fork.register(self)
         self._poll_thread = threading.Thread(
-            target=self._poll_loop, name="prompton-snapshot", daemon=True
+            target=self._poll_loop, name="prompton-use-cases", daemon=True
         )
         self._poll_thread.start()
 
@@ -152,7 +152,8 @@ class SnapshotStore:
     def current(self) -> SnapshotEntry:
         """The document to resolve against, refreshing in the background when it is stale.
 
-        Raises :class:`~prompton.errors.SnapshotUnavailableError` only when no tier has anything.
+        Raises :class:`~prompton.errors.UseCaseDocumentUnavailableError` only when no tier has
+        anything.
         """
         with self._lock:
             entry = self._entry
@@ -177,18 +178,18 @@ class SnapshotStore:
         if scope_error is not None:
             # a document was found, it just is not this client's: say so instead of blaming
             # the network, which is working fine
-            raise SnapshotUnavailableError(scope_error)
+            raise UseCaseDocumentUnavailableError(scope_error)
         if self._config.mode == "test":
-            raise SnapshotUnavailableError(
-                "test mode serves only the document you load: call load_snapshot(...) first "
-                "(prompton.testing.make_snapshot builds one)"
+            raise UseCaseDocumentUnavailableError(
+                "test mode serves only the document you load: call load_use_cases(...) first "
+                "(prompton.testing.make_use_case_document builds one)"
             )
         opening = (
             "offline mode makes no remote calls and nothing is cached"
             if self._config.mode == "offline"
             else "PromptOn is unreachable and nothing is cached"
         )
-        raise SnapshotUnavailableError(
+        raise UseCaseDocumentUnavailableError(
             f"{opening}: no snapshot in memory, on disk "
             f"({self._config.disk_cache_path or 'disabled'}) or in a bundle "
             f"({self._config.bundle_path or 'none'}) for environment "
@@ -265,7 +266,7 @@ class SnapshotStore:
             log.warning("prompton: could not read the %s snapshot %s: %s", source, path, error)
             return None
         try:
-            data = SnapshotData.from_json(raw)
+            data = UseCaseDocument.from_json(raw)
         except PromptOnError as error:
             # A corrupt, partial or outdated file is ignored, never raised.
             log.warning("prompton: ignoring the %s snapshot %s: %s", source, path, error)
@@ -284,7 +285,7 @@ class SnapshotStore:
             stale_since=time.monotonic(),
         )
 
-    def _matches_scope(self, data: SnapshotData, path: Path, source: Source) -> bool:
+    def _matches_scope(self, data: UseCaseDocument, path: Path, source: Source) -> bool:
         """A snapshot for another environment or project is never used.
 
         The reason is kept, because "PromptOn is unreachable" is the wrong thing to tell someone
@@ -339,7 +340,7 @@ class SnapshotStore:
                     self._entry = None
                 return self.load_local() is not None
             if raise_errors:
-                raise SnapshotUnavailableError(
+                raise UseCaseDocumentUnavailableError(
                     "no API key configured: set PTN_API_KEY or pass api_key= to use the network"
                 )
             return False
@@ -352,7 +353,7 @@ class SnapshotStore:
             if raise_errors:
                 if isinstance(last_error, BaseException):
                     raise last_error
-                raise SnapshotUnavailableError(
+                raise UseCaseDocumentUnavailableError(
                     f"PromptOn asked this client to wait {pause:.0f}s before the next snapshot "
                     "request; pass force=True to refresh anyway"
                 )
@@ -385,7 +386,7 @@ class SnapshotStore:
 
     def _get_snapshot(self, etag: str | None) -> HttpResponse:
         query = urlencode({"environment": self._config.environment})
-        url = f"{self._config.base_url}/snapshot?{query}"
+        url = f"{self._config.base_url}/use-cases?{query}"
         headers = build_headers(self._config.api_key, self._config.user_agent)
         if etag:
             headers["if-none-match"] = etag
@@ -393,7 +394,7 @@ class SnapshotStore:
 
     def _install(self, response: HttpResponse) -> bool:
         try:
-            data = SnapshotData.from_json(response.body)
+            data = UseCaseDocument.from_json(response.body)
         except PromptOnError as error:
             self._record_failure(error)
             log.error("prompton: the server returned a snapshot this SDK cannot read: %s", error)
@@ -521,7 +522,7 @@ class SnapshotStore:
         """Write the current document to ``path`` so it can be committed as a bundle."""
         entry = self.peek()
         if entry is None:
-            raise SnapshotUnavailableError("no snapshot to export: fetch one first")
+            raise UseCaseDocumentUnavailableError("no snapshot to export: fetch one first")
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(target, entry.raw)
@@ -540,9 +541,9 @@ class SnapshotStore:
         return target
 
     def install(
-        self, data: SnapshotData, *, raw: bytes | None = None, source_name: Source = "remote"
+        self, data: UseCaseDocument, *, raw: bytes | None = None, source_name: Source = "remote"
     ) -> None:
-        """Put a document straight into memory. Used by test mode and by ``load_snapshot``."""
+        """Put a document straight into memory. Used by test mode and by ``load_use_cases``."""
         with self._lock:
             self._entry = SnapshotEntry(
                 data=data,

@@ -176,7 +176,7 @@ class Config:
 
         if mode_value == "test":
             # A test-mode client must start empty and behave the same on every machine, so it
-            # reads neither the developer's OS cache nor a bundle: load_snapshot() is the only way
+            # reads neither the developer's OS cache nor a bundle: load_use_cases() is the only way
             # to put a document in it. (offline mode is the one that reads them for real.)
             disk_path = None
             bundle_path = None

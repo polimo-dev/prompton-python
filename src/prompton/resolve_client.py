@@ -1,10 +1,10 @@
-"""The ``POST /resolve`` client: the simple path, and the smoke test.
+"""The ``POST /use-cases/{key}/prompt`` client: the simple path, and the smoke test.
 
 The server runs the same algorithm as :mod:`prompton.resolver`, so this is the quickest way to
 prove a deployment is live and to see exactly how a prompt renders. It is *not* the hot path: it
-costs a request per call. Ask for the raw template once (no ``variables``), cache it for the same
-ten seconds the snapshot uses, and render locally - which is what :meth:`ResolveClient.resolve`
-does for you.
+costs a request per call. Ask for the raw template once (no ``variables``), cache it for the
+same ten seconds the use-case document uses, and render locally - which is what
+:meth:`ResolveClient.fill` does for you.
 
 When the server rate-limits, fails or cannot be reached, a cached answer is served instead.
 """
@@ -18,77 +18,80 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 from .config import Config
-from .errors import APIError, ConfigurationError, SnapshotUnavailableError, TransportError
+from .errors import APIError, ConfigurationError, TransportError, UseCaseDocumentUnavailableError
 from .http import Transport, build_headers, parse_api_error, retry_after_seconds
 from .template import render as render_template
 from .template import render_messages
 
-__all__ = ["RemoteResolution", "ResolveClient"]
+__all__ = ["FilledPrompt", "ResolveClient"]
 
 log = logging.getLogger("prompton")
 
 
 @dataclass(frozen=True)
-class RemoteResolution:
-    """The body of a ``POST /resolve`` answer, with the messages already rendered."""
+class FilledPrompt:
+    """The body of a ``POST /use-cases/{key}/prompt`` answer, with the prompt rendered."""
 
-    use_case: str
+    key: str
     kind: str
     deployment: dict[str, Any]
     prompt: str | None
-    prompts: list[str]
+    prompt_names: list[str]
     model: str | None
     model_id: str | None
     provider: str | None
-    effective_params: dict[str, Any]
-    effective_provider_options: dict[str, Any]
+    params: dict[str, Any]
+    provider_options: dict[str, Any]
     prompt_version: dict[str, Any] | None
     messages: list[dict[str, Any]] | None = None
     text: str | None = None
     warnings: list[str] = field(default_factory=list)
     etag: str | None = None
+    source: str | None = None
 
     @classmethod
-    def from_body(cls, body: Mapping[str, Any]) -> RemoteResolution:
+    def from_body(cls, body: Mapping[str, Any]) -> FilledPrompt:
         return cls(
-            use_case=body.get("use_case", ""),
+            key=body.get("key", ""),
             kind=body.get("kind", "chat"),
             deployment=body.get("deployment") or {},
             prompt=body.get("prompt"),
-            prompts=list(body.get("prompts") or []),
+            prompt_names=list(body.get("prompt_names") or []),
             model=body.get("model"),
             model_id=body.get("model_id"),
             provider=body.get("provider"),
-            effective_params=dict(body.get("effective_params") or {}),
-            effective_provider_options=dict(body.get("effective_provider_options") or {}),
+            params=dict(body.get("params") or {}),
+            provider_options=dict(body.get("provider_options") or {}),
             prompt_version=body.get("prompt_version"),
             messages=body.get("messages"),
             text=body.get("text"),
             warnings=list(body.get("warnings") or []),
             etag=body.get("etag"),
+            source=body.get("source"),
         )
 
-    def rendered(self, variables: Mapping[str, Any] | None) -> RemoteResolution:
+    def rendered(self, variables: Mapping[str, Any] | None) -> FilledPrompt:
         """This answer with its raw templates rendered against ``variables``."""
         if variables is None:
             return self
         messages = render_messages(self.messages, variables) if self.messages is not None else None
         text = render_template(self.text, variables) if self.text is not None else None
-        return RemoteResolution(
+        return FilledPrompt(
             **{**self.__dict__, "messages": messages, "text": text},
         )
 
 
 @dataclass
 class _CacheEntry:
-    value: RemoteResolution
+    value: FilledPrompt
     at: float
 
 
 class ResolveClient:
-    """Calls ``POST /resolve``, caching the raw answer for the configured TTL."""
+    """Calls ``POST /use-cases/{key}/prompt``, caching the raw answer for the configured TTL."""
 
     def __init__(self, config: Config, transport: Transport) -> None:
         self._config = config
@@ -98,7 +101,7 @@ class ResolveClient:
         self._not_before = 0.0
         self._failures = 0
 
-    def resolve(
+    def fill(
         self,
         use_case: str,
         *,
@@ -106,7 +109,7 @@ class ResolveClient:
         variables: Mapping[str, Any] | None = None,
         environment: str | None = None,
         render_locally: bool = True,
-    ) -> RemoteResolution:
+    ) -> FilledPrompt:
         """Resolve on the server and render locally.
 
         The raw answer (no ``variables`` sent) is cached per use case, prompt and environment for
@@ -140,13 +143,17 @@ class ResolveClient:
         except TransportError as error:
             self._note_failure(error)
             if entry is not None:
-                log.warning("prompton: /resolve failed, serving the cached answer: %s", error)
+                log.warning(
+                    "prompton: prompt endpoint failed, serving the cached answer: %s", error
+                )
                 return entry.value.rendered(variables)
             raise
         except APIError as error:
             # a retryable status already scheduled its own pause in _request
             if entry is not None:
-                log.warning("prompton: /resolve failed, serving the cached answer: %s", error)
+                log.warning(
+                    "prompton: prompt endpoint failed, serving the cached answer: %s", error
+                )
                 return entry.value.rendered(variables)
             raise
 
@@ -158,23 +165,23 @@ class ResolveClient:
 
     def _without_remote(
         self, key: tuple[str, str, str], variables: Mapping[str, Any] | None
-    ) -> RemoteResolution:
+    ) -> FilledPrompt:
         """No remote calls are allowed: serve the cached answer, or say why there is none."""
         if self._config.mode == "test":
             raise ConfigurationError(
-                "resolve_remote() is a network call and test mode makes none; load a document "
-                "with load_snapshot() and use resolve() instead"
+                "filled_prompt() is a network call and test mode makes none; load a document "
+                "with load_use_cases() and use use_case() instead"
             )
         with self._lock:
             entry = self._cache.get(key)
         if entry is not None:
             return entry.value.rendered(variables)
         if self._config.mode == "offline":
-            raise SnapshotUnavailableError(
-                "offline mode makes no remote calls, and no /resolve answer is cached for "
-                f"{key[0]!r}; use resolve() against the disk cache or the bundle instead"
+            raise UseCaseDocumentUnavailableError(
+                "offline mode makes no remote calls, and no use-case prompt answer is cached for "
+                f"{key[0]!r}; use use_case() against the disk cache or the bundle instead"
             )
-        raise SnapshotUnavailableError(
+        raise UseCaseDocumentUnavailableError(
             "no API key configured: set PTN_API_KEY or pass api_key= to use the network"
         )
 
@@ -184,8 +191,8 @@ class ResolveClient:
         prompt: str | None,
         environment: str,
         variables: Mapping[str, Any] | None = None,
-    ) -> RemoteResolution:
-        payload: dict[str, Any] = {"use_case": use_case, "environment": environment}
+    ) -> FilledPrompt:
+        payload: dict[str, Any] = {"environment": environment}
         if prompt is not None:
             payload["prompt"] = prompt
         if variables is not None:
@@ -194,7 +201,7 @@ class ResolveClient:
         headers["content-type"] = "application/json"
         response = self._transport.request(
             "POST",
-            f"{self._config.base_url}/resolve",
+            f"{self._config.base_url}/use-cases/{quote(use_case, safe='')}/prompt",
             headers=headers,
             body=json.dumps(payload).encode("utf-8"),
             timeout=self._config.timeout,
@@ -202,9 +209,13 @@ class ResolveClient:
         if response.status == 200:
             body = response.json()
             if not isinstance(body, dict):
-                raise APIError(response.status, message="the /resolve answer was not an object")
-            return RemoteResolution.from_body(body)
+                raise APIError(
+                    response.status, message="the use-case prompt answer was not an object"
+                )
+            return FilledPrompt.from_body(body)
         error = parse_api_error(response)
+        if response.status == 404 and "key" not in error.details:
+            error.details["key"] = use_case
         if response.status == 429 or response.status >= 500:
             self._note_failure(error, retry_after_seconds(response))
         raise error

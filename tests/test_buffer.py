@@ -80,7 +80,7 @@ class TestBatching:
             buffer.enqueue(record())
         drain(buffer)
         assert len(transport.generation_requests) == 1
-        assert len(transport.generation_requests[0]["body"]["generations"]) == 50
+        assert len(transport.generation_requests[0]["body"]["logs"]) == 50
 
     def test_the_size_trigger_flushes_without_a_flush_call(self):
         transport = FakeTransport(lambda call: json_response(202, ACCEPTED))
@@ -115,7 +115,7 @@ class TestBatching:
         for _ in range(450):
             buffer.enqueue(record())
         drain(buffer)
-        sizes = [len(call["body"]["generations"]) for call in transport.generation_requests]
+        sizes = [len(call["body"]["logs"]) for call in transport.generation_requests]
         assert sizes == [MAX_BATCH_RECORDS, MAX_BATCH_RECORDS, 50]
 
     def test_the_environment_is_forced_onto_the_whole_batch(self):
@@ -156,7 +156,7 @@ class TestRetries:
         assert len(transport.generation_requests) == 2
         first, second = transport.generation_requests
         assert first["body"] == second["body"]
-        assert second["body"]["generations"][0]["id"] == item["id"]
+        assert second["body"]["logs"][0]["id"] == item["id"]
 
     def test_a_5xx_is_retried_and_a_transport_failure_too(self, started):
         answers = [
@@ -175,7 +175,7 @@ class TestRetries:
         seen: list[int] = []
 
         def handler(call):
-            size = len(call["body"]["generations"])
+            size = len(call["body"]["logs"])
             seen.append(size)
             if size > 1:
                 return json_response(413, {"error": {"code": "payload_too_large"}})
@@ -249,7 +249,7 @@ class TestBoundedQueue:
             buffer.enqueue(record(id=value))
         assert buffer.stats.dropped_queue_full == 5
         drain(buffer)
-        sent = [item["id"] for item in transport.generation_requests[0]["body"]["generations"]]
+        sent = [item["id"] for item in transport.generation_requests[0]["body"]["logs"]]
         assert sent == ids[5:]
 
 

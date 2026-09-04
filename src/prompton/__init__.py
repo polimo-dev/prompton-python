@@ -1,30 +1,25 @@
 """PromptOn SDK for Python.
 
 PromptOn is the control plane for your app's LLM prompts. For each use case and environment it
-holds one **pin**: a prompt version, one model and its parameters. Your app fetches a snapshot of
+holds one **pin**: a prompt version, one model and its parameters. Your app fetches use cases for
 those pins, renders the pinned prompt with this call's variables, calls the provider **itself with
 its own key and HTTP client**, and sends monitoring logs back in batches. PromptOn is never in the
-request path; if it is down your app keeps running on the last snapshot it received.
+request path; if it is down your app keeps running on the last use cases it received.
 
     import prompton
 
     prompton.configure(api_key="ptn_myproject_...")
 
-    resolution = prompton.resolve("support_reply")
-    messages = prompton.render(resolution, {"question": question})
+    use_case = prompton.use_case("support_reply")
+    messages = use_case.messages({"question": question})
 
     def call():
         answer = openai_client.chat.completions.create(
-            model=resolution.model, messages=messages, **resolution.effective_params
+            model=use_case.model, messages=messages, **use_case.params
         )
-        return prompton.Outcome(
-            content=answer.choices[0].message.content,
-            finish_reason=answer.choices[0].finish_reason,
-            input_tokens=answer.usage.prompt_tokens,
-            output_tokens=answer.usage.completion_tokens,
-        )
+        return prompton.Result.from_openai(answer)
 
-    outcome = prompton.with_generation(resolution, call, variables={"question": question})
+    result = use_case.track(call, variables={"question": question})
 
 A module-level default client covers the common case of one client per process. Build a
 :class:`PromptOn` yourself when you want several, or when you want to control its lifetime.
@@ -33,12 +28,12 @@ A module-level default client covers the common case of one client per process. 
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from ._version import SDK_NAME, VERSION
 from .buffer import BufferStats
-from .client import PromptOn
+from .client import PromptOn, UseCase
 from .config import Config
 from .errors import (
     APIError,
@@ -48,20 +43,19 @@ from .errors import (
     PromptOnError,
     ProviderError,
     RenderError,
-    ResolutionError,
-    SnapshotUnavailableError,
     TemplateError,
     TemplateSyntaxError,
     TransportError,
     UnknownPromptError,
     UnknownUseCaseError,
     UnresolvedError,
+    UseCaseDocumentUnavailableError,
+    UseCaseLookupError,
 )
-from .generation import Outcome
+from .generation import Result
 from .http import HttpResponse, Transport, UrllibTransport
-from .resolve_client import RemoteResolution
-from .resolver import Resolution
-from .snapshot_data import SnapshotData
+from .resolve_client import FilledPrompt
+from .snapshot_data import UseCaseDocument
 from .stop_kind import normalize as normalize_stop_kind
 from .stop_kind import truncated as output_truncated
 from .template import LintReason, variables_of
@@ -75,20 +69,16 @@ __all__ = [
     "BufferStats",
     "Config",
     "ConfigurationError",
+    "FilledPrompt",
     "HttpResponse",
     "LintReason",
     "MissingVariableError",
     "NoTemplateError",
-    "Outcome",
     "PromptOn",
     "PromptOnError",
     "ProviderError",
-    "RemoteResolution",
     "RenderError",
-    "Resolution",
-    "ResolutionError",
-    "SnapshotData",
-    "SnapshotUnavailableError",
+    "Result",
     "TemplateError",
     "TemplateSyntaxError",
     "Transport",
@@ -97,25 +87,27 @@ __all__ = [
     "UnknownUseCaseError",
     "UnresolvedError",
     "UrllibTransport",
+    "UseCase",
+    "UseCaseDocument",
+    "UseCaseDocumentUnavailableError",
+    "UseCaseLookupError",
     "__version__",
     "close",
     "configure",
+    "filled_prompt",
     "flush",
-    "generation_id",
     "get_client",
     "lint_template",
     "log",
+    "log_id",
     "normalize_stop_kind",
     "output_truncated",
     "prompt_names",
-    "render",
-    "resolve",
-    "resolve_remote",
     "set_client",
-    "snapshot_info",
+    "use_case",
+    "use_cases_info",
     "uuid7",
     "variables_of",
-    "with_generation",
 ]
 
 __version__ = VERSION
@@ -154,16 +146,9 @@ def set_client(client: PromptOn | None) -> None:
         _default = client
 
 
-def resolve(use_case: str, prompt: str | None = None) -> Resolution:
-    """:meth:`PromptOn.resolve` on the default client."""
-    return get_client().resolve(use_case, prompt)
-
-
-def render(
-    resolution: Resolution, variables: Mapping[str, Any] | None = None
-) -> list[dict[str, Any]] | str:
-    """:meth:`PromptOn.render` on the default client."""
-    return get_client().render(resolution, variables)
+def use_case(key: str, prompt: str | None = None) -> UseCase:
+    """:meth:`PromptOn.use_case` on the default client."""
+    return get_client().use_case(key, prompt)
 
 
 def prompt_names(use_case: str) -> list[str]:
@@ -171,16 +156,16 @@ def prompt_names(use_case: str) -> list[str]:
     return get_client().prompt_names(use_case)
 
 
-def resolve_remote(
+def filled_prompt(
     use_case: str,
     *,
     prompt: str | None = None,
     variables: Mapping[str, Any] | None = None,
     environment: str | None = None,
     render_locally: bool = True,
-) -> RemoteResolution:
-    """:meth:`PromptOn.resolve_remote` on the default client."""
-    return get_client().resolve_remote(
+) -> FilledPrompt:
+    """:meth:`PromptOn.filled_prompt` on the default client."""
+    return get_client().filled_prompt(
         use_case,
         prompt=prompt,
         variables=variables,
@@ -194,24 +179,19 @@ def log(record: Mapping[str, Any], **options: Any) -> str:
     return get_client().log(record, **options)
 
 
+def log_id() -> str:
+    """A UUIDv7 record id, issued before the provider call."""
+    return uuid7()
+
+
 def flush(timeout: float = 5.0) -> BufferStats:
     """:meth:`PromptOn.flush` on the default client."""
     return get_client().flush(timeout=timeout)
 
 
-def with_generation(resolution: Resolution, call: Callable[[], Any], **meta: Any) -> Any:
-    """:meth:`PromptOn.with_generation` on the default client."""
-    return get_client().with_generation(resolution, call, **meta)
-
-
-def generation_id() -> str:
-    """A UUIDv7 record id, issued before the provider call."""
-    return uuid7()
-
-
-def snapshot_info() -> dict[str, Any]:
-    """:meth:`PromptOn.snapshot_info` on the default client."""
-    return get_client().snapshot_info()
+def use_cases_info() -> dict[str, Any]:
+    """:meth:`PromptOn.use_cases_info` on the default client."""
+    return get_client().use_cases_info()
 
 
 def close(timeout: float = 5.0) -> None:

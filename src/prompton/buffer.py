@@ -38,7 +38,7 @@ log = logging.getLogger("prompton")
 
 MAX_BATCH_RECORDS = 200
 MAX_BATCH_BYTES = 5_000_000
-_ENVELOPE_OVERHEAD = 20  # {"generations":[]} plus a little room
+_ENVELOPE_OVERHEAD = 20  # {"logs":[]} plus a little room
 
 
 @dataclass
@@ -356,8 +356,8 @@ class LogBuffer:
             return
 
         query = urlencode({"environment": self._config.environment})
-        url = f"{self._config.base_url}/generations?{query}"
-        body = json.dumps({"generations": batch.records}, ensure_ascii=False).encode("utf-8")
+        url = f"{self._config.base_url}/logs?{query}"
+        body = json.dumps({"logs": batch.records}, ensure_ascii=False).encode("utf-8")
         headers = build_headers(self._config.api_key, self._config.user_agent)
         headers["content-type"] = "application/json"
         try:

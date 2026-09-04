@@ -1,6 +1,6 @@
 """Every exception the SDK raises.
 
-The rule of thumb: configuration mistakes and resolution mistakes raise, logging never does.
+The rule of thumb: configuration mistakes and use-case lookup mistakes raise, logging never does.
 ``PromptOn.log`` and ``PromptOn.flush`` swallow their own failures (they count them instead), so a
 monitoring problem can never take down a request that already produced an answer.
 """
@@ -18,22 +18,22 @@ class ConfigurationError(PromptOnError):
     """An option or environment variable holds a value the SDK cannot use."""
 
 
-class SnapshotUnavailableError(PromptOnError):
-    """No snapshot in memory, on disk or in the bundle, and the server could not be reached.
+class UseCaseDocumentUnavailableError(PromptOnError):
+    """No use-case document in memory, on disk or in the bundle, and the server is unreachable.
 
-    This is the only resolution error that means "PromptOn is unreachable and nothing is cached".
-    Every other resolution error is a bug in the app or in the deployment.
+    This is the only use-case lookup error that means "PromptOn is unreachable and nothing is
+    cached". Every other lookup error is a bug in the app or in the deployment.
     """
 
 
-class ResolutionError(PromptOnError):
-    """Base class for the local resolution failures described by the runtime contract."""
+class UseCaseLookupError(PromptOnError):
+    """Base class for local use-case lookup failures described by the runtime contract."""
 
-    code = "resolution_error"
+    code = "use_case_lookup_error"
 
 
-class UnknownUseCaseError(ResolutionError):
-    """The snapshot holds no use case with this key."""
+class UnknownUseCaseError(UseCaseLookupError):
+    """The use-case document holds no use case with this key."""
 
     code = "unknown_use_case"
 
@@ -42,7 +42,7 @@ class UnknownUseCaseError(ResolutionError):
         self.use_case = use_case
 
 
-class UnresolvedError(ResolutionError):
+class UnresolvedError(UseCaseLookupError):
     """The use case exists but has no live deployment in this environment."""
 
     code = "unresolved"
@@ -52,7 +52,7 @@ class UnresolvedError(ResolutionError):
         self.use_case = use_case
 
 
-class UnknownPromptError(ResolutionError):
+class UnknownPromptError(UseCaseLookupError):
     """The live deployment pins no prompt version under the requested name.
 
     There is deliberately no fallback to ``default``: shipping English to a request that asked for
@@ -61,14 +61,14 @@ class UnknownPromptError(ResolutionError):
 
     code = "unknown_prompt"
 
-    def __init__(self, use_case: str, prompt: str, available_prompts: list[str]) -> None:
+    def __init__(self, use_case: str, prompt: str, prompt_names: list[str]) -> None:
         super().__init__(
             f'the live deployment for {use_case} pins no prompt named "{prompt}" - '
-            f"available prompts: {', '.join(available_prompts) or '(none)'}"
+            f"available prompt names: {', '.join(prompt_names) or '(none)'}"
         )
         self.use_case = use_case
         self.prompt = prompt
-        self.available_prompts = available_prompts
+        self.prompt_names = prompt_names
 
 
 class TemplateError(PromptOnError):
@@ -103,7 +103,7 @@ class RenderError(TemplateError):
 
 
 class NoTemplateError(TemplateError):
-    """The resolution carries no template (``kind: embedding``)."""
+    """The selected use case carries no template (``kind: embedding``)."""
 
     code = "no_template"
 
@@ -130,10 +130,10 @@ class TransportError(PromptOnError):
 
 
 class ProviderError(PromptOnError):
-    """Raise this from inside ``with_generation`` to record a typed provider failure.
+    """Raise this from inside ``track`` to record a typed provider failure.
 
     ``kind`` is one of ``http_4xx``, ``http_5xx``, ``rate_limited``, ``timeout``, ``transport``,
-    ``parse`` and ``app``; anything else is recorded as ``app``. Pass ``outcome`` when the provider
+    ``parse`` and ``app``; anything else is recorded as ``app``. Pass ``result`` when the provider
     did answer and you want its usage and output kept as a quality signal (a parse failure, say).
     The exception propagates unchanged after the monitoring log has been built.
     """
@@ -144,9 +144,9 @@ class ProviderError(PromptOnError):
         *,
         kind: str = "app",
         status: int | None = None,
-        outcome: Any = None,
+        result: Any = None,
     ) -> None:
         super().__init__(message)
         self.kind = kind
         self.status = status
-        self.outcome = outcome
+        self.result = result

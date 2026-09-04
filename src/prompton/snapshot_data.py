@@ -1,9 +1,9 @@
-"""Decoding ``GET /snapshot`` (schema v3) into the structures the resolver reads.
+"""Decoding ``GET /use-cases`` (schema v4) into the structures the resolver reads.
 
 A deployment revision is a **pin, not a router**: one model plus one pinned prompt version per
-prompt name. v1 and v2 documents - a stale disk cache, an old bundle - are refused, and the SDK
-keeps polling for a v3 one. A schema version newer than 3 decodes only the known fields and leaves
-a warning, because v1 only ever adds fields.
+prompt name. Older documents - a stale disk cache, an old bundle - are refused, and the SDK
+keeps polling for a v4 one. Newer and legacy schema shapes are refused too: this SDK reads exactly
+schema v4.
 """
 
 from __future__ import annotations
@@ -22,12 +22,12 @@ __all__ = [
     "InvalidSnapshotError",
     "Model",
     "PromptVersion",
-    "SnapshotData",
     "UnsupportedSchemaVersionError",
     "UseCase",
+    "UseCaseDocument",
 ]
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _KINDS = ("chat", "text", "embedding")
 _ENGINES = ("liquid", "raw")
@@ -38,16 +38,14 @@ DEFAULT_MAX_BYTES = 262_144
 
 
 class InvalidSnapshotError(PromptOnError):
-    """The document is not a snapshot the SDK can read."""
+    """The document is not a use-case document the SDK can read."""
 
 
 class UnsupportedSchemaVersionError(InvalidSnapshotError):
-    """The document announces a schema version older than the one this SDK reads."""
+    """The document announces a schema version this SDK does not read."""
 
     def __init__(self, version: int) -> None:
-        super().__init__(
-            f"unsupported snapshot schema_version {version}; this SDK reads v{SCHEMA_VERSION}"
-        )
+        super().__init__(f"unsupported schema_version {version}; this SDK reads v{SCHEMA_VERSION}")
         self.version = version
 
 
@@ -136,8 +134,8 @@ class Model:
 
 
 @dataclass(frozen=True)
-class SnapshotData:
-    """A decoded snapshot document."""
+class UseCaseDocument:
+    """A decoded use-case document."""
 
     schema_version: int = SCHEMA_VERSION
     project: str | None = None
@@ -152,24 +150,24 @@ class SnapshotData:
         return self.deployments.get(use_case_key)
 
     @classmethod
-    def from_json(cls, raw: bytes | str) -> SnapshotData:
+    def from_json(cls, raw: bytes | str) -> UseCaseDocument:
         """Decode a JSON document. Raises :class:`InvalidSnapshotError`."""
         try:
             document = json.loads(raw)
         except (ValueError, UnicodeDecodeError) as error:
-            raise InvalidSnapshotError(f"snapshot is not valid JSON: {error}") from error
+            raise InvalidSnapshotError(f"use-case document is not valid JSON: {error}") from error
         return cls.from_mapping(document)
 
     @classmethod
-    def from_mapping(cls, document: Any) -> SnapshotData:
+    def from_mapping(cls, document: Any) -> UseCaseDocument:
         """Decode an already-parsed document."""
-        if isinstance(document, SnapshotData):
+        if isinstance(document, UseCaseDocument):
             return document
         if not isinstance(document, Mapping):
-            raise InvalidSnapshotError("snapshot must be an object")
+            raise InvalidSnapshotError("use-case document must be an object")
 
         warnings: list[str] = []
-        version = _schema_version(document, warnings)
+        version = _schema_version(document)
 
         raw_use_cases = document.get("use_cases")
         if not isinstance(raw_use_cases, Mapping):
@@ -199,18 +197,13 @@ class SnapshotData:
 # ---------------------------------------------------------------------------
 
 
-def _schema_version(document: Mapping[str, Any], warnings: list[str]) -> int:
-    raw = document.get("schema_version", document.get("version"))
+def _schema_version(document: Mapping[str, Any]) -> int:
+    raw = document.get("schema_version")
     if raw is None:
-        if isinstance(document.get("deployments"), Mapping):
-            return SCHEMA_VERSION
         raise InvalidSnapshotError("schema_version is required")
-    if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
-        raise InvalidSnapshotError(f"schema_version must be a positive integer, got {raw!r}")
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        raise InvalidSnapshotError(f"schema_version must be integer {SCHEMA_VERSION}, got {raw!r}")
     if raw == SCHEMA_VERSION:
-        return raw
-    if raw > SCHEMA_VERSION:
-        warnings.append(f"unknown_schema_version: {raw}")
         return raw
     raise UnsupportedSchemaVersionError(raw)
 

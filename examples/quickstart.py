@@ -1,11 +1,11 @@
-"""A runnable end-to-end example: resolve a prompt, call a provider, log the generation.
+"""A runnable end-to-end example: load a use case, call a provider, log the result.
 
 The "provider" here is a fake function, so this runs with no API keys and no network::
 
     python examples/quickstart.py
 
 Point it at a real PromptOn instead by setting ``PTN_API_KEY`` (and ``PTN_HOST``); the code below
-does not change - only where the snapshot comes from does::
+does not change - only where the use-case document comes from does::
 
     PTN_HOST=http://localhost:4000 PTN_API_KEY=ptn_yourproject_... python examples/quickstart.py
 """
@@ -17,8 +17,8 @@ import os
 import random
 import time
 
-from prompton import Outcome, PromptOn, ProviderError
-from prompton.testing import make_snapshot
+from prompton import PromptOn, ProviderError, Result
+from prompton.testing import make_use_case_document
 
 USE_CASE = "greeting"
 
@@ -44,10 +44,10 @@ def build_client() -> PromptOn:
         print("using the PromptOn server at", os.environ.get("PTN_HOST", "https://app.prompton.ai"))
         return PromptOn()
 
-    print("no PTN_API_KEY set - running against an in-memory snapshot")
+    print("no PTN_API_KEY set - running against an in-memory use-case document")
     client = PromptOn(mode="offline", api_key=None, disk_cache=False)
-    client.load_snapshot(
-        make_snapshot(
+    client.load_use_cases(
+        make_use_case_document(
             project="example",
             environment="production",
             greeting={
@@ -70,36 +70,29 @@ def build_client() -> PromptOn:
 def main() -> None:
     client = build_client()
     with client:
-        resolution = client.resolve(USE_CASE)
+        use_case = client.use_case(USE_CASE)
         print(
-            f"resolved {USE_CASE}: model={resolution.model} "
-            f"revision={resolution.deployment_revision} prompt={resolution.prompt} "
-            f"source={resolution.resolution_source}"
+            f"loaded {USE_CASE}: model={use_case.model} "
+            f"revision={use_case.deployment_revision} prompt={use_case.prompt} "
+            f"source={use_case.source}"
         )
         print("prompts pinned by the live revision:", client.prompt_names(USE_CASE))
 
         variables = {"name": "Ada"}
-        messages = client.render(resolution, variables)
+        messages = use_case.messages(variables)
         print("rendered prompt:", json.dumps(messages, ensure_ascii=False, indent=2))
 
-        def call() -> Outcome:
+        def call() -> Result:
             try:
-                answer = fake_provider(resolution.model, messages, **resolution.effective_params)
+                answer = fake_provider(use_case.model, messages, **use_case.params)
             except TimeoutError as error:
                 raise ProviderError(str(error), kind="timeout") from error
-            choice = answer["choices"][0]
-            return Outcome(
-                content=choice["message"]["content"],
-                finish_reason=choice["finish_reason"],
-                input_tokens=answer["usage"]["prompt_tokens"],
-                output_tokens=answer["usage"]["completion_tokens"],
-                cost_source="unknown",
-                model_used=answer["model"],
-            )
+            result = Result.from_openai(answer)
+            result.cost_source = "unknown"
+            return result
 
         try:
-            outcome = client.with_generation(
-                resolution,
+            result = use_case.track(
                 call,
                 variables=variables,
                 input_messages=messages,
@@ -108,14 +101,14 @@ def main() -> None:
                 context={"language": "en"},
                 metadata={"example": True},
             )
-            print("the model said:", outcome.content)
+            print("the model said:", result.content)
         except ProviderError as error:
             # the failure was logged before it reached you, with its kind
             print("the provider failed:", error, f"(kind={error.kind})")
 
         stats = client.flush(timeout=5).as_dict()
         print("monitoring logs:", {k: v for k, v in stats.items() if v})
-        print("snapshot:", client.snapshot_info())
+        print("use cases:", client.use_cases_info())
 
 
 if __name__ == "__main__":

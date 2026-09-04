@@ -1,4 +1,4 @@
-"""The client: resolve, render, log.
+"""The client: use cases, render, log.
 
 Three things happen here and nothing else. You ask which prompt, model and params to use; you
 render that prompt with this call's variables; you send back what happened. Your provider key and
@@ -22,22 +22,131 @@ from ._version import SDK_NAME, VERSION
 from .buffer import BufferStats, LogBuffer
 from .config import Config
 from .errors import NoTemplateError, ProviderError
-from .generation import CallMeta, Outcome, build_record, iso_timestamp
+from .generation import CallMeta, Result, build_record, iso_timestamp
 from .http import Transport, UrllibTransport
 from .payload import apply_policy
-from .resolve_client import RemoteResolution, ResolveClient
+from .resolve_client import FilledPrompt, ResolveClient
 from .resolver import Resolution
 from .resolver import prompt_names as _prompt_names
 from .resolver import resolve as _resolve
-from .snapshot_data import SnapshotData
+from .snapshot_data import UseCaseDocument
 from .store import SnapshotStore
 from .template import render as render_template
 from .template import render_messages
 from .uuidv7 import uuid7
 
-__all__ = ["PromptOn"]
+__all__ = ["PromptOn", "UseCase"]
 
 log = logging.getLogger("prompton")
+
+
+class _TrackLog:
+    def __init__(self) -> None:
+        self._result: Any = None
+
+    def result(self, value: Any) -> Any:
+        """Record the provider result for the monitoring log and return it unchanged."""
+        self._result = value
+        return value
+
+
+class UseCase:
+    """A resolved use case with rendering and tracking helpers."""
+
+    def __init__(self, client: PromptOn, resolution: Resolution) -> None:
+        self._client = client
+        self._resolution = resolution
+
+    @property
+    def key(self) -> str:
+        return self._resolution.key
+
+    @property
+    def kind(self) -> str:
+        return self._resolution.kind
+
+    @property
+    def model(self) -> str | None:
+        return self._resolution.model
+
+    @property
+    def model_id(self) -> str | None:
+        return self._resolution.model_id
+
+    @property
+    def provider(self) -> str | None:
+        return self._resolution.provider
+
+    @property
+    def params(self) -> dict[str, Any]:
+        return self._resolution.params
+
+    @property
+    def provider_options(self) -> dict[str, Any]:
+        return self._resolution.provider_options
+
+    @property
+    def deployment(self) -> dict[str, Any]:
+        return self._resolution.deployment
+
+    @property
+    def prompt_names(self) -> tuple[str, ...]:
+        return self._resolution.prompt_names
+
+    @property
+    def source(self) -> str:
+        return self._resolution.source
+
+    @property
+    def prompt(self) -> str | None:
+        return self._resolution.prompt
+
+    @property
+    def prompt_version(self) -> dict[str, Any] | None:
+        if self._resolution.prompt_version_id is None:
+            return None
+        return {
+            "id": self._resolution.prompt_version_id,
+            "number": self._resolution.prompt_version_number,
+        }
+
+    def messages(
+        self, variables: Mapping[str, Any] | None = None, *, prompt: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Render this use case as chat messages."""
+        resolution = self._selected(prompt)
+        if resolution.kind != "chat" or resolution.messages is None:
+            raise NoTemplateError(
+                f"use case {resolution.use_case!r} is kind {resolution.kind!r}, not 'chat'"
+            )
+        messages = render_messages(resolution.messages, variables, resolution.engine)
+        self._commit(resolution)
+        return messages
+
+    def text(self, variables: Mapping[str, Any] | None = None, *, prompt: str | None = None) -> str:
+        """Render this use case as a text prompt."""
+        resolution = self._selected(prompt)
+        if resolution.kind != "text" or resolution.text_template is None:
+            raise NoTemplateError(
+                f"use case {resolution.use_case!r} is kind {resolution.kind!r}, not 'text'"
+            )
+        text = render_template(resolution.text_template, variables, resolution.engine)
+        self._commit(resolution)
+        return text
+
+    def track(self, call: Callable[[], Any] | None = None, **meta: Any) -> Any:
+        """Track a provider call, or return a context manager when called without ``call``."""
+        if call is not None:
+            return self._client._track_call(self._resolution, call, **meta)
+        return self._client._track_context(self._resolution, **meta)
+
+    def _selected(self, prompt: str | None) -> Resolution:
+        if prompt is None or prompt == self._resolution.prompt:
+            return self._resolution
+        return self._client._resolve(key=self._resolution.use_case, prompt=prompt)
+
+    def _commit(self, resolution: Resolution) -> None:
+        self._resolution = resolution
 
 
 class PromptOn:
@@ -48,8 +157,8 @@ class PromptOn:
     :meth:`close` (or use it as a context manager) at shutdown so the last logs are sent.
 
     >>> client = PromptOn(api_key="ptn_myproject_...")           # doctest: +SKIP
-    >>> resolution = client.resolve("support_reply")             # doctest: +SKIP
-    >>> messages = client.render(resolution, {"question": "..."})  # doctest: +SKIP
+    >>> use_case = client.use_case("support_reply")              # doctest: +SKIP
+    >>> messages = use_case.messages({"question": "..."})        # doctest: +SKIP
     """
 
     def __init__(
@@ -108,45 +217,32 @@ class PromptOn:
 
     # -- resolving ---------------------------------------------------------
 
-    def resolve(self, use_case: str, prompt: str | None = None) -> Resolution:
+    def use_case(self, key: str, prompt: str | None = None) -> UseCase:
         """Which prompt version, model and params to use for this call site.
 
         Served from memory within the cache TTL, with no HTTP call. Raises
         :class:`~prompton.errors.UnknownUseCaseError`, :class:`~prompton.errors.UnresolvedError`
         or :class:`~prompton.errors.UnknownPromptError` for a mistake in the app or the deployment,
-        and :class:`~prompton.errors.SnapshotUnavailableError` only when PromptOn is unreachable
-        *and* nothing is cached.
+        and :class:`~prompton.errors.UseCaseDocumentUnavailableError` only when PromptOn is
+        unreachable *and* nothing is cached.
         """
+        return UseCase(self, self._resolve(key=key, prompt=prompt))
+
+    def _resolve(self, *, key: str, prompt: str | None = None) -> Resolution:
         entry = self._store.current()
         return _resolve(
             entry.data,
-            use_case,
+            key,
             prompt,
-            resolution_source=entry.source,
+            source=entry.source,
             etag=entry.etag,
         )
 
     def prompt_names(self, use_case: str) -> list[str]:
-        """The prompt names the live deployment pins - exactly what ``resolve`` accepts."""
+        """The prompt names the live deployment pins - exactly what ``use_case`` accepts."""
         return _prompt_names(self._store.current().data, use_case)
 
-    def render(
-        self, resolution: Resolution, variables: Mapping[str, Any] | None = None
-    ) -> list[dict[str, Any]] | str:
-        """Render the pinned prompt: a message list for ``chat``, a string for ``text``.
-
-        Raises :class:`~prompton.errors.MissingVariableError` naming the variable that was not
-        supplied, and :class:`~prompton.errors.NoTemplateError` for an embedding use case.
-        """
-        if resolution.kind == "chat" and resolution.messages is not None:
-            return render_messages(resolution.messages, variables, resolution.engine)
-        if resolution.kind == "text" and resolution.text_template is not None:
-            return render_template(resolution.text_template, variables, resolution.engine)
-        raise NoTemplateError(
-            f"use case {resolution.use_case!r} of kind {resolution.kind!r} has no prompt template"
-        )
-
-    def resolve_remote(
+    def filled_prompt(
         self,
         use_case: str,
         *,
@@ -154,15 +250,15 @@ class PromptOn:
         variables: Mapping[str, Any] | None = None,
         environment: str | None = None,
         render_locally: bool = True,
-    ) -> RemoteResolution:
-        """Resolve through ``POST /resolve`` instead of the local snapshot.
+    ) -> FilledPrompt:
+        """Call the prompt endpoint instead of the local use-case document.
 
         The simple path and the smoke test. The raw answer is cached for the same TTL as the
         snapshot and rendered locally, so this stays cheap when you call it repeatedly. Pass
         ``render_locally=False`` to let the server render instead - a request every time, and the
         exact reference behaviour.
         """
-        return self._resolve_client.resolve(
+        return self._resolve_client.fill(
             use_case,
             prompt=prompt,
             variables=variables,
@@ -170,44 +266,44 @@ class PromptOn:
             render_locally=render_locally,
         )
 
-    # -- snapshot ----------------------------------------------------------
+    # -- use-case document -------------------------------------------------
 
     def refresh(self, *, force: bool = False) -> bool:
-        """Fetch the snapshot once, now, and wait. ``True`` when a new document was installed.
+        """Fetch the use-case document once, now, and wait. ``True`` when it changed.
 
         An active ``Retry-After`` pause is honoured here too, so calling this from a readiness
         probe cannot keep a rate-limited server busy; ``force=True`` overrides it.
         """
         return self._store.refresh(raise_errors=True, force=force)
 
-    def snapshot(self) -> SnapshotData:
+    def use_cases(self) -> UseCaseDocument:
         """The decoded document currently in use."""
         return self._store.current().data
 
-    def snapshot_info(self) -> dict[str, Any]:
+    def use_cases_info(self) -> dict[str, Any]:
         """Where the current document came from and how fresh it is."""
         return self._store.info()
 
-    def export_snapshot(self, path: str | os.PathLike[str]) -> Path:
+    def export_use_cases(self, path: str | os.PathLike[str]) -> Path:
         """Write the current document to ``path``, to be committed as a bundle."""
         return self._store.export(path)
 
-    def load_snapshot(
-        self, source: Mapping[str, Any] | SnapshotData | str | os.PathLike[str]
+    def load_use_cases(
+        self, source: Mapping[str, Any] | UseCaseDocument | str | os.PathLike[str]
     ) -> None:
-        """Put a document straight into memory: a mapping, a decoded snapshot, or a JSON file."""
-        if isinstance(source, SnapshotData):
+        """Put a document straight into memory: a mapping, decoded document, or JSON file."""
+        if isinstance(source, UseCaseDocument):
             self._store.install(source, source_name="manual")
             return
         if isinstance(source, Mapping):
-            self._store.install(SnapshotData.from_mapping(source), source_name="manual")
+            self._store.install(UseCaseDocument.from_mapping(source), source_name="manual")
             return
         raw = Path(source).read_bytes()
-        self._store.install(SnapshotData.from_json(raw), raw=raw, source_name="bundle")
+        self._store.install(UseCaseDocument.from_json(raw), raw=raw, source_name="bundle")
 
     # -- monitoring logs ---------------------------------------------------
 
-    def generation_id(self) -> str:
+    def log_id(self) -> str:
         """A UUIDv7 to use as a record id, issued before the provider call."""
         return uuid7()
 
@@ -215,13 +311,13 @@ class PromptOn:
         self,
         record: Mapping[str, Any],
         *,
-        resolution: Resolution | None = None,
+        use_case: UseCase | None = None,
         policy: Any = None,
     ) -> str:
         """Enqueue one monitoring log the app built itself, and return its id.
 
         Returns immediately. ``id`` (a UUIDv7), ``sdk`` and ``started_at`` are filled in when
-        absent, and passing ``resolution`` fills in ``resolution_source`` and the deployment and
+        absent, and passing ``use_case`` fills in ``source`` and the deployment and
         prompt evidence. Raises ``ValueError`` when a required field is missing - that is a bug in
         the calling code, worth catching straight away; everything after this point (the network,
         the server, a full queue) is counted, never raised.
@@ -231,11 +327,12 @@ class PromptOn:
         item.setdefault("started_at", iso_timestamp())
         item.setdefault("sdk", {"name": SDK_NAME, "version": VERSION})
 
+        resolution = use_case._resolution if use_case is not None else None
         if resolution is not None:
             item.setdefault("use_case", resolution.use_case)
             item.setdefault("kind", resolution.kind)
             item.setdefault("model", resolution.model)
-            item.setdefault("resolution_source", resolution.resolution_source)
+            item.setdefault("source", resolution.source)
             for key, value in (
                 ("deployment_id", resolution.deployment_id),
                 ("deployment_revision", resolution.deployment_revision),
@@ -254,8 +351,8 @@ class PromptOn:
         ]
         if missing:
             raise ValueError(
-                f"a monitoring log needs {', '.join(missing)}; pass resolution= to fill in "
-                "use_case and model from a Resolution"
+                f"a monitoring log needs {', '.join(missing)}; pass use_case= to fill in "
+                "use-case and model evidence"
             )
         if item["status"] not in ("ok", "error"):
             raise ValueError(f"status must be 'ok' or 'error', got {item['status']!r}")
@@ -301,7 +398,7 @@ class PromptOn:
 
     # -- the wrapper -------------------------------------------------------
 
-    def with_generation(
+    def _track_call(
         self,
         resolution: Resolution,
         call: Callable[[], Any],
@@ -319,9 +416,9 @@ class PromptOn:
     ) -> Any:
         """Run ``call``, time it, and log what happened. Returns whatever ``call`` returned.
 
-        Return an :class:`~prompton.generation.Outcome` (or a mapping in the same shape, or the
+        Return an :class:`~prompton.generation.Result` (or a mapping in the same shape, or the
         completion text) to record usage, cost and the stop reason. Raise
-        :class:`~prompton.errors.ProviderError` for a typed failure - pass ``outcome=`` on it when
+        :class:`~prompton.errors.ProviderError` for a typed failure - pass ``result=`` on it when
         the provider did answer and the usage is still worth keeping, as with a parse failure. Any
         exception is logged as ``status: error`` and then **re-raised unchanged**.
         """
@@ -348,13 +445,13 @@ class PromptOn:
                 started_at,
                 started,
                 status="error",
-                outcome=Outcome.coerce(error.outcome),
+                result=Result.coerce(error.result),
                 error=error,
             )
             raise
         except BaseException as error:
             self._log_from_wrapper(
-                resolution, meta, started_at, started, status="error", outcome=None, error=error
+                resolution, meta, started_at, started, status="error", result=None, error=error
             )
             raise
         self._log_from_wrapper(
@@ -363,20 +460,20 @@ class PromptOn:
             started_at,
             started,
             status="ok",
-            outcome=Outcome.coerce(result),
+            result=Result.coerce(result),
             error=None,
         )
         return result
 
     @contextlib.contextmanager
-    def track(self, resolution: Resolution, **meta: Any) -> Iterator[dict[str, Any]]:
-        """Context-manager form of :meth:`with_generation`.
+    def _track_context(self, resolution: Resolution, **meta: Any) -> Iterator[_TrackLog]:
+        """Context-manager form of :meth:`UseCase.track`.
 
-        >>> with client.track(resolution, variables=variables) as call:   # doctest: +SKIP
+        >>> with use_case.track(variables=variables) as log:   # doctest: +SKIP
         ...     answer = my_provider(...)
-        ...     call["outcome"] = Outcome(content=answer.text, finish_reason=answer.stop)
+        ...     log.result(Result(content=answer.text, finish_reason=answer.stop))
         """
-        slot: dict[str, Any] = {"outcome": None}
+        slot = _TrackLog()
         started_at = iso_timestamp()
         started = time.monotonic()
         call_meta = CallMeta(
@@ -400,7 +497,7 @@ class PromptOn:
                 started_at,
                 started,
                 status="error",
-                outcome=Outcome.coerce(error.outcome or slot.get("outcome")),
+                result=Result.coerce(error.result or slot._result),
                 error=error,
             )
             raise
@@ -411,7 +508,7 @@ class PromptOn:
                 started_at,
                 started,
                 status="error",
-                outcome=Outcome.coerce(slot.get("outcome")),
+                result=Result.coerce(slot._result),
                 error=error,
             )
             raise
@@ -421,7 +518,7 @@ class PromptOn:
             started_at,
             started,
             status="ok",
-            outcome=Outcome.coerce(slot.get("outcome")),
+            result=Result.coerce(slot._result),
             error=None,
         )
 
@@ -433,7 +530,7 @@ class PromptOn:
         started: float,
         *,
         status: str,
-        outcome: Outcome | None,
+        result: Result | None,
         error: BaseException | None,
     ) -> None:
         try:
@@ -443,7 +540,7 @@ class PromptOn:
                 status=status,
                 started_at=started_at,
                 latency_ms=int((time.monotonic() - started) * 1000),
-                outcome=outcome,
+                result=result,
                 error=error,
             )
         except Exception as failure:  # noqa: BLE001 - monitoring must not break the app

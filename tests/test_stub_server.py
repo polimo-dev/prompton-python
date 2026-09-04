@@ -14,11 +14,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from prompton import PromptOn
-from prompton.errors import SnapshotUnavailableError, TransportError
+from prompton.errors import TransportError, UseCaseDocumentUnavailableError
 from prompton.http import UrllibTransport
-from prompton.testing import make_snapshot
+from prompton.testing import make_use_case_document
 
-DOCUMENT = make_snapshot(
+DOCUMENT = make_use_case_document(
     project="stub",
     environment="production",
     greeting={
@@ -133,14 +133,14 @@ def client_for(host: str, tmp_path, **options) -> PromptOn:
 def test_a_real_round_trip_resolves_renders_and_logs(stub, tmp_path):
     client = client_for(stub.host, tmp_path)
     try:
-        resolution = client.resolve("greeting")
-        assert client.render(resolution, {"name": "Ada"})[0]["content"] == "Say hello to Ada."
-        client.with_generation(resolution, lambda: "hello", variables={"name": "Ada"})
+        use_case = client.use_case("greeting")
+        assert use_case.messages({"name": "Ada"})[0]["content"] == "Say hello to Ada."
+        use_case.track(lambda: "hello", variables={"name": "Ada"})
         stats = client.flush(timeout=5)
         assert stats.accepted == 1
         posts = [call for call in stub.calls if call["method"] == "POST"]
         assert len(posts) == 1
-        assert posts[0]["path"] == "/api/v1/generations?environment=production"
+        assert posts[0]["path"] == "/api/v1/logs?environment=production"
         assert posts[0]["headers"]["authorization"] == "Bearer ptn_stub_key"
         assert posts[0]["headers"]["user-agent"].startswith("prompton-python/")
     finally:
@@ -150,7 +150,7 @@ def test_a_real_round_trip_resolves_renders_and_logs(stub, tmp_path):
 def test_a_repoll_sends_if_none_match_and_gets_a_304(stub, tmp_path):
     client = client_for(stub.host, tmp_path, cache_ttl=0.0)
     try:
-        client.resolve("greeting")
+        client.use_case("greeting")
         assert client.refresh() is False  # 304
         gets = [call for call in stub.calls if call["method"] == "GET"]
         assert gets[1]["headers"]["if-none-match"] == ETAG
@@ -161,15 +161,15 @@ def test_a_repoll_sends_if_none_match_and_gets_a_304(stub, tmp_path):
 def test_a_429_pauses_and_the_caller_never_sees_an_error(stub, tmp_path):
     client = client_for(stub.host, tmp_path, cache_ttl=0.0)
     try:
-        client.resolve("greeting")
+        client.use_case("greeting")
         stub.snapshot_status = 429
         stub.retry_after = "45"
         client._store.refresh(raise_errors=False)
-        assert client.snapshot_info()["retry_after_seconds"] > 40
+        assert client.use_cases_info()["retry_after_seconds"] > 40
 
         before = len([call for call in stub.calls if call["method"] == "GET"])
         for _ in range(3):
-            assert client.resolve("greeting").model == "openai/gpt-4o-mini"
+            assert client.use_case("greeting").model == "openai/gpt-4o-mini"
         after = len([call for call in stub.calls if call["method"] == "GET"])
         assert after == before, "no request may be made before Retry-After has elapsed"
     finally:
@@ -178,7 +178,7 @@ def test_a_429_pauses_and_the_caller_never_sees_an_error(stub, tmp_path):
 
 def test_when_the_server_is_down_the_disk_cache_keeps_the_app_running(stub, tmp_path):
     warm = client_for(stub.host, tmp_path)
-    warm.resolve("greeting")
+    warm.use_case("greeting")
     warm.close(timeout=1)
 
     dead_host = stub.host
@@ -187,9 +187,9 @@ def test_when_the_server_is_down_the_disk_cache_keeps_the_app_running(stub, tmp_
 
     cold = client_for(dead_host, tmp_path)
     try:
-        resolution = cold.resolve("greeting")
-        assert resolution.resolution_source == "disk"
-        assert resolution.model == "openai/gpt-4o-mini"
+        use_case = cold.use_case("greeting")
+        assert use_case.source == "disk"
+        assert use_case.model == "openai/gpt-4o-mini"
     finally:
         cold.close(timeout=1)
 
@@ -200,8 +200,8 @@ def test_with_nothing_cached_a_dead_server_fails_with_a_clear_message(stub, tmp_
     stub.server.server_close()
     client = client_for(dead_host, tmp_path)
     try:
-        with pytest.raises(SnapshotUnavailableError) as error:
-            client.resolve("greeting")
+        with pytest.raises(UseCaseDocumentUnavailableError) as error:
+            client.use_case("greeting")
         assert "unreachable" in str(error.value)
     finally:
         client.close(timeout=1)
@@ -210,4 +210,4 @@ def test_with_nothing_cached_a_dead_server_fails_with_a_clear_message(stub, tmp_
 def test_the_transport_turns_a_refused_connection_into_a_transport_error():
     transport = UrllibTransport()
     with pytest.raises(TransportError):
-        transport.request("GET", "http://127.0.0.1:1/api/v1/snapshot", headers={}, timeout=0.5)
+        transport.request("GET", "http://127.0.0.1:1/api/v1/use-cases", headers={}, timeout=0.5)

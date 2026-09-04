@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prompton-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "PromptOn SDK for Python - fetch your pinned prompt, model and params, call the provider yourself, send monitoring logs back."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,7 +33,7 @@ Source = "https://github.com/polimo-dev/prompton-python"
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
-prompton-snapshot = "prompton.__main__:main"
+prompton-use-cases = "prompton.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/prompton"]

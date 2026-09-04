@@ -1,9 +1,9 @@
-"""``python -m prompton`` - fetch a snapshot and write it to a file.
+"""``python -m prompton`` - fetch a use-case document and write it to a file.
 
 Run this in CI on every build and commit the result as the bundle, so a brand-new container can
-resolve before it has ever reached PromptOn::
+load use cases before it has ever reached PromptOn::
 
-    python -m prompton export --out app/prompton/snapshot.production.json
+    python -m prompton export --out app/prompton/use-cases.production.json
 
 On failure it exits non-zero and leaves any existing file untouched.
 """
@@ -24,13 +24,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"prompton-sdk {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    export = sub.add_parser("export", help="fetch the snapshot and write it to a file")
-    export.add_argument("--out", required=True, help="where to write the snapshot JSON")
+    export = sub.add_parser("export", help="fetch the use-case document and write it to a file")
+    export.add_argument("--out", required=True, help="where to write the use-case JSON")
     export.add_argument("--environment", default=None, help="environment (default production)")
     export.add_argument("--host", default=None, help="PromptOn host (default $PTN_HOST)")
     export.add_argument("--api-key", default=None, help="runtime key (default $PTN_API_KEY)")
 
-    info = sub.add_parser("info", help="print where the current snapshot came from")
+    info = sub.add_parser("info", help="print where the current use-case document came from")
     info.add_argument("--environment", default=None)
     info.add_argument("--host", default=None)
     info.add_argument("--api-key", default=None)
@@ -47,11 +47,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "export":
             client.refresh(force=True)
-            path = client.export_snapshot(args.out)
+            path = client.export_use_cases(args.out)
             print(f"wrote {path}")
             return 0
         client.refresh(force=True)
-        print(json.dumps(client.snapshot_info(), indent=2, default=str))
+        print(json.dumps(client.use_cases_info(), indent=2, default=str))
         return 0
     except PromptOnError as error:
         print(f"prompton: {error}", file=sys.stderr)

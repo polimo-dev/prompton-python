@@ -1,13 +1,15 @@
 """Helpers for testing an app that uses PromptOn, without a server and without HTTP.
 
 Run your suite with ``mode="test"``: nothing is sent, and every monitoring log the app produced is
-kept on ``client.captured`` for you to assert on. Build a snapshot for the use cases under test
-with :func:`make_snapshot` and hand it to ``client.load_snapshot``.
+kept on ``client.captured`` for you to assert on. Build a use-case document for the use cases
+under test with :func:`make_use_case_document` and hand it to ``client.load_use_cases``.
 
     client = PromptOn(mode="test", api_key=None)
-    client.load_snapshot(make_snapshot(greeting={"messages": [...], "model": "openai/gpt-4o-mini"}))
+    client.load_use_cases(
+        make_use_case_document(greeting={"messages": [...], "model": "openai/gpt-4o-mini"})
+    )
 
-    resolution = client.resolve("greeting")
+    use_case = client.use_case("greeting")
     ...
     assert client.captured[0]["status"] == "ok"
 """
@@ -18,22 +20,22 @@ from typing import Any
 
 from .snapshot_data import SCHEMA_VERSION
 
-__all__ = ["make_snapshot"]
+__all__ = ["make_use_case_document"]
 
 _DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
-def make_snapshot(
+def make_use_case_document(
     *,
     project: str = "test",
     environment: str = "production",
     **use_cases: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build a schema-v3 snapshot document for the given use cases.
+    """Build a schema-v4 use-case document for the given use cases.
 
     Each keyword is a use case key; its value describes the pin::
 
-        make_snapshot(
+        make_use_case_document(
             greeting={
                 "kind": "chat",                       # chat (default) | text | embedding
                 "model": "openai/gpt-4o-mini",

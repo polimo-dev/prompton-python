@@ -22,11 +22,11 @@ from prompton.config import Config
 from prompton.errors import TransportError
 from prompton.http import HttpResponse
 from prompton.store import SnapshotStore
-from prompton.testing import make_snapshot
+from prompton.testing import make_use_case_document
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is POSIX only")
 
-DOCUMENT = make_snapshot(
+DOCUMENT = make_use_case_document(
     project="demo",
     environment="production",
     greeting={"messages": [{"role": "user", "content": "hi"}]},

@@ -1,7 +1,7 @@
 """Building a monitoring-log record, and the wrapper that times a provider call.
 
-``build_record`` turns a :class:`~prompton.resolver.Resolution`, the call metadata and the outcome
-into the exact JSON shape ``POST /api/v1/generations`` accepts. Top-level keys whose value is
+``build_record`` turns a use-case lookup result, the call metadata and the provider result
+into the exact JSON shape ``POST /api/v1/logs`` accepts. Top-level keys whose value is
 ``None`` are omitted; the nulls inside ``usage`` are sent as-is and accepted.
 """
 
@@ -19,7 +19,7 @@ from .resolver import Resolution
 from .stop_kind import normalize as normalize_stop_kind
 from .uuidv7 import uuid7
 
-__all__ = ["ERROR_KINDS", "Outcome", "build_record", "iso_timestamp"]
+__all__ = ["ERROR_KINDS", "Result", "build_record", "iso_timestamp"]
 
 ERROR_KINDS = ("http_4xx", "http_5xx", "rate_limited", "timeout", "transport", "parse", "app")
 
@@ -27,10 +27,10 @@ REQUIRED_FIELDS = ("id", "use_case", "model", "status", "started_at")
 
 
 @dataclass
-class Outcome:
+class Result:
     """What the provider answered, in the shape the monitoring log wants.
 
-    Return one of these from the function you pass to ``with_generation``. Every field is optional:
+    Return one of these from the function you pass to ``track``. Every field is optional:
     fill in what your provider actually reports. ``result`` is yours - the SDK carries it back to
     you untouched, so a wrapper can hand you the parsed answer.
     """
@@ -50,8 +50,8 @@ class Outcome:
     result: Any = None
 
     @classmethod
-    def coerce(cls, value: Any) -> Outcome | None:
-        """Accept an Outcome, a mapping in the same shape, a plain string, or nothing."""
+    def coerce(cls, value: Any) -> Result | None:
+        """Accept a Result, a mapping in the same shape, a plain string, or nothing."""
         if value is None or isinstance(value, cls):
             return value
         if isinstance(value, str):
@@ -74,6 +74,38 @@ class Outcome:
                 result=value.get("result"),
             )
         return None
+
+    @classmethod
+    def from_openai(cls, answer: Any) -> Result:
+        """Extract content, finish reason and usage from an OpenAI chat completion-like object."""
+        choice = _first(_get(answer, "choices"))
+        message = _get(choice, "message")
+        usage = _get(answer, "usage")
+        return cls(
+            content=_get(message, "content"),
+            tool_calls=_get(message, "tool_calls"),
+            finish_reason=_get(choice, "finish_reason"),
+            input_tokens=_get(usage, "prompt_tokens", "input_tokens"),
+            output_tokens=_get(usage, "completion_tokens", "output_tokens"),
+            usage_raw=usage,
+            model_used=_get(answer, "model"),
+            result=answer,
+        )
+
+    @classmethod
+    def from_anthropic(cls, answer: Any) -> Result:
+        """Extract content, stop reason and usage from an Anthropic message-like object."""
+        usage = _get(answer, "usage")
+        content = _anthropic_content(_get(answer, "content"))
+        return cls(
+            content=content,
+            finish_reason=_get(answer, "stop_reason"),
+            input_tokens=_get(usage, "input_tokens"),
+            output_tokens=_get(usage, "output_tokens"),
+            usage_raw=usage,
+            model_used=_get(answer, "model"),
+            result=answer,
+        )
 
 
 @dataclass
@@ -107,11 +139,11 @@ def build_record(
     status: str,
     started_at: str,
     latency_ms: int | None = None,
-    outcome: Outcome | None = None,
+    result: Result | None = None,
     error: BaseException | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble one monitoring-log record. Top-level ``None`` values are dropped."""
-    usage_source = outcome or Outcome()
+    usage_source = result or Result()
     metadata = stringify_keys(meta.metadata)
     if usage_source.is_byok is not None:
         metadata = {**metadata, "is_byok": usage_source.is_byok}
@@ -124,19 +156,19 @@ def build_record(
         "prompt": resolution.prompt if resolution else None,
         "prompt_version_id": resolution.prompt_version_id if resolution else None,
         "model_id": resolution.model_id if resolution else None,
-        "resolution_source": resolution.resolution_source if resolution else "manual",
+        "source": resolution.source if resolution else "manual",
         "context": stringify_keys(meta.context),
         "kind": resolution.kind if resolution else None,
         "model": resolution.model if resolution else None,
         "model_used": usage_source.model_used,
         "provider": resolution.provider if resolution else None,
         "upstream_provider": usage_source.upstream_provider,
-        "params": merge(resolution.effective_params if resolution else None, meta.params),
+        "params": merge(resolution.params if resolution else None, meta.params),
         "input": _build_input(meta),
-        "output": _build_output(outcome),
+        "output": _build_output(result),
         "status": status,
         "finish_reason": usage_source.finish_reason,
-        "stop_kind": _stop_kind(outcome),
+        "stop_kind": _stop_kind(result),
         "error": _build_error(error),
         "usage": {
             "input_tokens": usage_source.input_tokens,
@@ -167,25 +199,57 @@ def _build_input(meta: CallMeta) -> dict[str, Any] | None:
     return payload or None
 
 
-def _build_output(outcome: Outcome | None) -> dict[str, Any] | None:
-    if outcome is None:
+def _build_output(result: Result | None) -> dict[str, Any] | None:
+    if result is None:
         return None
     payload: dict[str, Any] = {}
-    if outcome.content is not None:
-        payload["content"] = outcome.content
-    if outcome.tool_calls is not None:
-        payload["tool_calls"] = outcome.tool_calls
+    if result.content is not None:
+        payload["content"] = result.content
+    if result.tool_calls is not None:
+        payload["tool_calls"] = result.tool_calls
     return payload or None
 
 
-def _stop_kind(outcome: Outcome | None) -> str | None:
-    if outcome is None:
+def _stop_kind(result: Result | None) -> str | None:
+    if result is None:
         return None
-    if outcome.stop_kind is not None:
-        return normalize_stop_kind(outcome.stop_kind)
-    if outcome.finish_reason is not None:
-        return normalize_stop_kind(outcome.finish_reason)
+    if result.stop_kind is not None:
+        return normalize_stop_kind(result.stop_kind)
+    if result.finish_reason is not None:
+        return normalize_stop_kind(result.finish_reason)
     return None
+
+
+def _get(value: Any, *names: str) -> Any:
+    for name in names:
+        if isinstance(value, Mapping) and name in value:
+            return value[name]
+        if hasattr(value, name):
+            return getattr(value, name)
+    return None
+
+
+def _first(value: Any) -> Any:
+    if isinstance(value, (list, tuple)) and value:
+        return value[0]
+    return None
+
+
+def _anthropic_content(content: Any) -> str | None:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, Mapping):
+            block_type = block.get("type")
+            text = block.get("text")
+            if (block_type is None or block_type == "text") and isinstance(text, str):
+                parts.append(text)
+        elif hasattr(block, "text") and isinstance(block.text, str):
+            parts.append(block.text)
+    return "".join(parts) if parts else None
 
 
 def _build_error(error: BaseException | Mapping[str, Any] | None) -> dict[str, Any] | None:
