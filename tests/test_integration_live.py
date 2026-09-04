@@ -80,8 +80,8 @@ class TestLocalResolutionMatchesTheServer:
         remote = client.filled_prompt(
             use_case, prompt=prompt, variables=variables, environment=environment
         )
-        assert local.deployment_id == remote.deployment["id"]
-        assert local.deployment_revision == remote.deployment["revision"]
+        assert local.deployment["id"] == remote.deployment["id"]
+        assert local.deployment["revision"] == remote.deployment["revision"]
         assert local.model == remote.model
         assert local.model_id == remote.model_id
         assert local.provider == remote.provider
@@ -188,8 +188,8 @@ class TestEnvironments:
             assert staging.use_cases().environment == "staging"
             local = staging.use_case("greeting")
             remote = staging.filled_prompt("greeting", variables={"name": "Ada"})
-            assert local.deployment_id == remote.deployment["id"]
-            assert local.deployment_id != client.use_case("greeting").deployment_id
+            assert local.deployment["id"] == remote.deployment["id"]
+            assert local.deployment["id"] != client.use_case("greeting").deployment["id"]
         finally:
             staging.close(timeout=1.0)
 
