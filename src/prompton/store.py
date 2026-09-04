@@ -31,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from . import _fork
 from .config import Config
 from .errors import PromptOnError, SnapshotUnavailableError, TransportError
 from .http import (
@@ -86,23 +87,32 @@ class SnapshotStore:
         self._poll_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._warned_no_key = False
+        self._scope_error: str | None = None
         self.last_error: BaseException | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
         """Load the local tiers, then start polling when polling is enabled."""
-        self.load_local()
         if self._config.mode == "test":
+            # test mode is deterministic: only load_snapshot() puts a document here
             return
+        self.load_local()
         if not self._config.remote_enabled:
             self._warn_no_remote()
             return
-        if self._config.poll and self._poll_thread is None:
-            self._poll_thread = threading.Thread(
-                target=self._poll_loop, name="prompton-snapshot", daemon=True
-            )
-            self._poll_thread.start()
+        self._start_poll_thread()
+
+    def _start_poll_thread(self) -> None:
+        if not self._config.poll or not self._config.remote_enabled:
+            return
+        if self._poll_thread is not None and self._poll_thread.is_alive():
+            return
+        _fork.register(self)
+        self._poll_thread = threading.Thread(
+            target=self._poll_loop, name="prompton-snapshot", daemon=True
+        )
+        self._poll_thread.start()
 
     def close(self) -> None:
         self._stop.set()
@@ -110,6 +120,20 @@ class SnapshotStore:
         self._poll_thread = None
         if thread is not None and thread.is_alive():
             thread.join(timeout=1.0)
+
+    def _restart_after_fork(self) -> None:
+        """Rebuild the inherited locks and restart polling in a forked child.
+
+        Threads do not survive ``fork()``. Without this a client built before a prefork server
+        forks would serve the document it held at fork time forever.
+        """
+        self._lock = threading.RLock()
+        self._refreshing = False
+        self._stop = threading.Event()
+        thread, self._poll_thread = self._poll_thread, None
+        if thread is None:
+            return  # never polled, or already closed: nothing to restart
+        self._start_poll_thread()
 
     def _warn_no_remote(self) -> None:
         if self._warned_no_key:
@@ -149,8 +173,23 @@ class SnapshotStore:
         with self._lock:
             if self._entry is not None:
                 return self._entry
+            scope_error = self._scope_error
+        if scope_error is not None:
+            # a document was found, it just is not this client's: say so instead of blaming
+            # the network, which is working fine
+            raise SnapshotUnavailableError(scope_error)
+        if self._config.mode == "test":
+            raise SnapshotUnavailableError(
+                "test mode serves only the document you load: call load_snapshot(...) first "
+                "(prompton.testing.make_snapshot builds one)"
+            )
+        opening = (
+            "offline mode makes no remote calls and nothing is cached"
+            if self._config.mode == "offline"
+            else "PromptOn is unreachable and nothing is cached"
+        )
         raise SnapshotUnavailableError(
-            "PromptOn is unreachable and nothing is cached: no snapshot in memory, on disk "
+            f"{opening}: no snapshot in memory, on disk "
             f"({self._config.disk_cache_path or 'disabled'}) or in a bundle "
             f"({self._config.bundle_path or 'none'}) for environment "
             f"{self._config.environment!r}"
@@ -246,40 +285,49 @@ class SnapshotStore:
         )
 
     def _matches_scope(self, data: SnapshotData, path: Path, source: Source) -> bool:
-        """A snapshot for another environment or project is never used."""
+        """A snapshot for another environment or project is never used.
+
+        The reason is kept, because "PromptOn is unreachable" is the wrong thing to tell someone
+        whose server answered perfectly well with a snapshot for the wrong project.
+        """
+        where = (
+            "the server returned a snapshot"
+            if source == "remote"
+            else f"the {source} snapshot {path}"
+        )
+        reason: str | None = None
         if data.environment and data.environment != self._config.environment:
-            log.warning(
-                "prompton: ignoring the %s snapshot %s: it is for environment %r, this client "
-                "reads %r",
-                source,
-                path,
-                data.environment,
-                self._config.environment,
+            reason = (
+                f"{where} for environment {data.environment!r} but this client is configured for "
+                f"{self._config.environment!r} (PTN_ENVIRONMENT, or environment=)"
             )
-            return False
-        if (
+        elif (
             data.project
             and self._config.project
             and self._config.project != "default"
             and data.project != self._config.project
         ):
-            log.warning(
-                "prompton: ignoring the %s snapshot %s: it is for project %r, this client reads %r",
-                source,
-                path,
-                data.project,
-                self._config.project,
+            reason = (
+                f"{where} for project {data.project!r} but this client is configured for project "
+                f"{self._config.project!r} (PTN_PROJECT, or the project slug in the api key)"
             )
-            return False
-        return True
+        if reason is None:
+            return True
+        log.warning("prompton: %s - ignoring it", reason)
+        with self._lock:
+            self._scope_error = reason
+        return False
 
     # -- remote ------------------------------------------------------------
 
-    def refresh(self, *, raise_errors: bool = True) -> bool:
+    def refresh(self, *, raise_errors: bool = True, force: bool = False) -> bool:
         """Fetch once, now, and wait for the answer. ``True`` when a new document was installed.
 
         This is the synchronous entry point for scripts and for a warm-up at boot. A ``304`` counts
         as success and returns ``False``.
+
+        A ``Retry-After`` pause applies here too - a readiness probe calling this in a loop must not
+        become the thing that keeps the server rate-limiting. Pass ``force=True`` to go anyway.
         """
         if self._config.mode == "test":
             return False
@@ -298,8 +346,16 @@ class SnapshotStore:
 
         with self._lock:
             entry = self._entry
-            blocked = time.monotonic() < self._not_before
-        if blocked and not raise_errors:
+            pause = self._not_before - time.monotonic()
+            last_error = self.last_error
+        if pause > 0 and not force:
+            if raise_errors:
+                if isinstance(last_error, BaseException):
+                    raise last_error
+                raise SnapshotUnavailableError(
+                    f"PromptOn asked this client to wait {pause:.0f}s before the next snapshot "
+                    "request; pass force=True to refresh anyway"
+                )
             return False
 
         try:
@@ -343,7 +399,9 @@ class SnapshotStore:
             log.error("prompton: the server returned a snapshot this SDK cannot read: %s", error)
             return False
         if not self._matches_scope(data, Path("<response>"), "remote"):
-            self._record_failure(PromptOnError("snapshot scope mismatch"))
+            with self._lock:
+                reason = self._scope_error or "snapshot scope mismatch"
+            self._record_failure(PromptOnError(reason))
             return False
 
         now = time.time()
@@ -360,6 +418,7 @@ class SnapshotStore:
             self._entry = entry
             self._failures = 0
             self._not_before = 0.0
+            self._scope_error = None
             self.last_error = None
         self._write_disk(entry)
         log.info(
@@ -403,7 +462,12 @@ class SnapshotStore:
     # -- background --------------------------------------------------------
 
     def _revalidate_in_background(self) -> None:
-        if not self._config.remote_enabled or self._config.poll:
+        if not self._config.remote_enabled:
+            return
+        if self._poll_thread is not None and self._poll_thread.is_alive():
+            # the poll thread owns revalidation - but only while it is actually running. It does
+            # not survive fork(), and gating on the option rather than on the thread is what
+            # leaves a prefork worker frozen on the document it inherited.
             return
         with self._lock:
             if self._refreshing or time.monotonic() < self._not_before:
@@ -489,12 +553,14 @@ class SnapshotStore:
             )
             self._failures = 0
             self._not_before = 0.0
+            self._scope_error = None
 
     def clear(self) -> None:
         with self._lock:
             self._entry = None
             self._failures = 0
             self._not_before = 0.0
+            self._scope_error = None
 
 
 def _as_text(value: Any) -> str | None:

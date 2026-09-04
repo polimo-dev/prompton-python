@@ -85,7 +85,7 @@ Precedence is always **explicit option > environment variable > default**.
 | `poll` | `PTN_POLL` | `true` | Refresh in a background thread. `false` refreshes on the next call instead (stale-while-revalidate) |
 | `disk_cache` | `PTN_DISK_CACHE` | on | `True`, `False`, or a path. Default is `<os cache dir>/prompton/<project>-<environment>.json` |
 | `bundle` | `PTN_BUNDLE` | — | A snapshot JSON shipped inside the app, used when memory and disk are empty |
-| `mode` | `PTN_MODE` | `live` | `test` (no HTTP, logs captured) or `offline` (disk and bundle only) |
+| `mode` | `PTN_MODE` | `live` | `test` (no HTTP, no disk cache or bundle, logs captured) or `offline` (disk and bundle only) |
 | `hash_end_user` | `PTN_HASH_END_USER` | `false` | Send `sha256(end_user_ref)` instead of the raw value |
 | `redact` | — | — | `fn(record) -> record`, applied last to every monitoring log |
 | `flush_interval` | `PTN_FLUSH_INTERVAL` | `2.0` | Time trigger for a batch, seconds |
@@ -126,7 +126,11 @@ concurrent rename, and a corrupt or partial file is ignored rather than raised.
 * On start the load order is **memory → disk → bundle → remote**, and the tier that answered is
   reported as `resolution_source` on the `Resolution` and on every monitoring log.
 * A document for **another environment or project is never used**. The file records both; a mismatch
-  is ignored with a warning.
+  is ignored with a warning, and if it leaves the client with nothing the error says so - the
+  server answered, it just answered for someone else's project.
+* **Prefork servers work.** Threads do not survive `fork()`, so a client built before gunicorn
+  `--preload` or uWSGI forks would otherwise never refresh again. The SDK restarts its poll thread
+  and its log sender in the child, and falls back to stale-while-revalidate if it cannot.
 
 ### How it fails
 
@@ -138,6 +142,8 @@ concurrent rename, and a corrupt or partial file is ignored rather than raised.
 | PromptOn unreachable, disk cache present | The disk document, `resolution_source="disk"` |
 | PromptOn unreachable, only a bundle present | The bundled document, `resolution_source="bundle"` |
 | PromptOn unreachable and **nothing cached** | `SnapshotUnavailableError` saying exactly that |
+| A snapshot arrives for another project or environment | It is ignored; if nothing else is cached, the error names both sides rather than blaming the network |
+| `resolve_remote()` in `mode="test"`, `mode="offline"`, or with no key | No request is made: `ConfigurationError` in test mode, otherwise the cached answer, or `SnapshotUnavailableError` |
 | Use case key not in the snapshot | `UnknownUseCaseError` - a bug in the app |
 | Use case has no live deployment | `UnresolvedError` - deploy it; never a silent fallback |
 | Prompt name not pinned by the live revision | `UnknownPromptError` with `available_prompts`; never falls back to `default` |
@@ -208,13 +214,21 @@ def call():
 ```python
 client.prompt_names("support_reply")  # ["default", "ko"] - exactly what resolve() accepts
 client.resolve_remote("support_reply", variables={...})  # POST /resolve: the smoke test
-client.refresh()  # fetch once, now, synchronously
+client.refresh()  # fetch once, now, synchronously (refresh(force=True) ignores a Retry-After pause)
 client.export_snapshot("app/prompton/snapshot.production.json")  # build a bundle
 client.snapshot_info()  # {"source", "etag", "age_seconds", "stale", ...}
 client.log(record)  # a record you built yourself
-client.flush()  # send the queue now and wait
+client.flush()  # send the queue now and wait, including the batch already on the wire
 client.stats  # enqueued / sent / accepted / duplicates / dropped_*
 ```
+
+`flush()` waits for everything the buffer still holds - the queue, a batch waiting out a retry, and
+the request in flight - so the counters it returns describe what actually happened; `close(timeout)`
+spends whatever the flush leaves on finishing that last batch. `stats.queued` counts all three, and
+`stats.batches_sent` counts only batches the server accepted.
+
+`refresh()` respects an active `Retry-After`: calling it in a readiness-probe loop cannot become the
+thing that keeps a rate-limited server busy. Pass `force=True` when you really mean now.
 
 From the command line, for CI:
 
@@ -243,6 +257,11 @@ resolution = client.resolve("support_reply")
 ...
 assert client.captured[0]["status"] == "ok"
 ```
+
+A test-mode client starts **empty**: it reads neither the machine's disk cache nor a bundle, so it
+behaves the same on a laptop with a warm cache as it does in CI, and `load_snapshot` is the only way
+to put a document in it. It also makes no HTTP call at all - `resolve_remote()` raises
+`ConfigurationError` rather than quietly reaching the network.
 
 `mode="offline"` is the other half: real resolution from the disk cache or the bundle, still no
 network - useful in CI and on a plane.

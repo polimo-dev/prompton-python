@@ -174,6 +174,13 @@ class Config:
         bundle_value = _pick(bundle, _env("PTN_BUNDLE"), None)
         bundle_path = Path(bundle_value) if bundle_value else None
 
+        if mode_value == "test":
+            # A test-mode client must start empty and behave the same on every machine, so it
+            # reads neither the developer's OS cache nor a bundle: load_snapshot() is the only way
+            # to put a document in it. (offline mode is the one that reads them for real.)
+            disk_path = None
+            bundle_path = None
+
         return cls(
             api_key=api_key_value,
             host=host_value,

@@ -46,11 +46,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         if args.command == "export":
-            client.refresh()
+            client.refresh(force=True)
             path = client.export_snapshot(args.out)
             print(f"wrote {path}")
             return 0
-        client.refresh()
+        client.refresh(force=True)
         print(json.dumps(client.snapshot_info(), indent=2, default=str))
         return 0
     except PromptOnError as error:

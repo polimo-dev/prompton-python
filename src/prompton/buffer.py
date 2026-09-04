@@ -26,6 +26,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from . import _fork
 from ._json import canonical_json
 from .config import Config
 from .errors import TransportError
@@ -56,8 +57,8 @@ class BufferStats:
     dropped_give_up: int = 0
     dropped_no_remote: int = 0
     send_failures: int = 0
-    batches_sent: int = 0
-    queued: int = 0
+    batches_sent: int = 0  # batches the server accepted; a 429/5xx/413 is not one
+    queued: int = 0  # everything still held: the queue, retried batches, the batch on the wire
 
     def as_dict(self) -> dict[str, int]:
         return asdict(self)
@@ -70,7 +71,7 @@ class _Item:
     at: float
 
 
-@dataclass
+@dataclass(eq=False)  # identity, so a batch can be found in _in_flight by `is`
 class _Batch:
     records: list[dict[str, Any]]
     sizes: list[int]
@@ -99,6 +100,7 @@ class LogBuffer:
         self._queue: deque[_Item] = deque()
         self._queued_bytes = 0
         self._pending: deque[_Batch] = deque()  # split or retried batches, sent before the queue
+        self._in_flight: list[_Batch] = []  # handed to _deliver: in neither queue nor pending
         self._not_before = 0.0
         self._force = False
         self._stop = False
@@ -119,11 +121,17 @@ class LogBuffer:
         """Start the worker thread. A no-op when nothing can be sent (test or offline mode)."""
         if self._worker is not None or self._config.mode == "test" or not self._can_send:
             return
+        _fork.register(self)
         self._worker = threading.Thread(target=self._run, name="prompton-logs", daemon=True)
         self._worker.start()
 
     def close(self, timeout: float = 5.0) -> None:
-        """Flush what is queued, best effort, then stop the worker."""
+        """Flush what is queued, best effort, then stop the worker.
+
+        ``timeout`` is the whole budget: whatever the flush leaves is what the worker gets to
+        finish the batch it is on.
+        """
+        deadline = time.monotonic() + timeout
         try:
             self.flush(timeout=timeout)
         finally:
@@ -133,7 +141,26 @@ class LogBuffer:
             worker = self._worker
             self._worker = None
             if worker is not None and worker.is_alive():
-                worker.join(timeout=1.0)
+                worker.join(timeout=max(deadline - time.monotonic(), 0.1))
+
+    def _restart_after_fork(self) -> None:
+        """Rebuild the inherited locks and restart the sender in a forked child.
+
+        Records queued at fork time stay queued in both processes. Their ids are the idempotency
+        key, so the copy that arrives second is counted as a duplicate rather than stored twice -
+        which is the safe direction: losing the records would not be.
+        """
+        self._lock = threading.Lock()
+        self._wake = threading.Condition(self._lock)
+        self._idle = threading.Event()
+        self._in_flight = []
+        self._force = False
+        if not self._queue and not self._pending:
+            self._idle.set()
+        worker, self._worker = self._worker, None
+        if worker is None or self._stop:
+            return
+        self.start()
 
     # -- producing ---------------------------------------------------------
 
@@ -179,40 +206,54 @@ class LogBuffer:
             self._queue.append(_Item(record, size, time.monotonic()))
             self._queued_bytes += size
             self.stats.enqueued += 1
-            self.stats.queued = len(self._queue)
+            self.stats.queued = self._backlog_locked()
             self._idle.clear()
             self._wake.notify_all()
 
     # -- consuming ---------------------------------------------------------
 
+    def _backlog_locked(self) -> int:
+        """Every record still held: queued, waiting out a retry, or on the wire right now."""
+        return (
+            len(self._queue)
+            + sum(len(batch.records) for batch in self._pending)
+            + sum(len(batch.records) for batch in self._in_flight)
+        )
+
     def flush(self, timeout: float = 5.0) -> BufferStats:
         """Send everything queued now and wait for the result.
 
-        This is the entry point for shutdown, tests and scripts. A pending ``Retry-After`` is still
-        honoured, so a flush during a rate-limit pause waits rather than hammering the server.
+        This is the entry point for shutdown, tests and scripts. It waits for the batch already on
+        the wire as well as for the queue, so the counters it returns describe what really
+        happened. A pending ``Retry-After`` is honoured, so a flush during a rate-limit pause waits
+        rather than hammering the server.
         """
         deadline = time.monotonic() + timeout
         while True:
             with self._lock:
-                if not self._queue and not self._pending:
+                if not self._queue and not self._pending and not self._in_flight:
                     break
                 self._force = True
                 self._wake.notify_all()
+                pause = self._not_before - time.monotonic()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 with self._lock:
-                    left = len(self._queue) + sum(len(b.records) for b in self._pending)
+                    left = self._backlog_locked()
                 log.warning(
                     "prompton: flush timed out with %s monitoring log(s) still queued", left
                 )
                 break
-            if self._worker is None:
-                self._send_once()
-            else:
+            if self._worker is not None:
                 self._idle.wait(min(remaining, 0.05))
+            elif pause > 0:
+                # no worker to wait on, so this thread waits out the pause itself
+                time.sleep(min(pause, remaining, 0.05))
+            else:
+                self._send_once()
         with self._lock:
             self._force = False
-            self.stats.queued = len(self._queue)
+            self.stats.queued = self._backlog_locked()
         return self.stats
 
     def _run(self) -> None:
@@ -222,7 +263,8 @@ class LogBuffer:
                     return
                 wait = self._delay_until_send_locked()
                 if wait is None:
-                    self._idle.set()
+                    if not self._in_flight:
+                        self._idle.set()
                     self._wake.wait(self._config.flush_interval)
                     continue
                 if wait > 0:
@@ -247,9 +289,16 @@ class LogBuffer:
         return max(self._queue[0].at + self._config.flush_interval - now, 0.0)
 
     def _next_batch(self) -> _Batch | None:
+        """Take the next batch, and hold it in ``_in_flight`` until the send is over.
+
+        A batch that lives in neither the queue nor ``_pending`` is invisible to ``flush``, which
+        is how a shutdown used to abandon the request it had just started.
+        """
         with self._lock:
             if self._pending:
-                return self._pending.popleft()
+                batch = self._pending.popleft()
+                self._in_flight.append(batch)
+                return batch
             if not self._queue:
                 return None
             records: list[dict[str, Any]] = []
@@ -264,26 +313,36 @@ class LogBuffer:
                 records.append(item.record)
                 sizes.append(item.size)
                 total += item.size + 1
-            return _Batch(records, sizes)
+            batch = _Batch(records, sizes)
+            self._in_flight.append(batch)
+            return batch
+
+    def _release_locked(self, batch: _Batch) -> None:
+        self._in_flight = [held for held in self._in_flight if held is not batch]
 
     def _send_once(self) -> None:
         batch = self._next_batch()
-        if batch is None or not batch.records:
+        if batch is None:
             self._mark_idle_if_empty()
             return
-        batch.attempts += 1
         try:
-            self._deliver(batch)
-        except Exception as error:  # noqa: BLE001 - the worker thread must never die
-            log.warning("prompton: unexpected error while sending monitoring logs: %s", error)
-            self._retry(batch, None, error)
+            if not batch.records:
+                return
+            batch.attempts += 1
+            try:
+                self._deliver(batch)
+            except Exception as error:  # noqa: BLE001 - the worker thread must never die
+                log.warning("prompton: unexpected error while sending monitoring logs: %s", error)
+                self._retry(batch, None, error)
         finally:
+            with self._lock:
+                self._release_locked(batch)
             self._mark_idle_if_empty()
 
     def _mark_idle_if_empty(self) -> None:
         with self._lock:
-            self.stats.queued = len(self._queue)
-            if not self._queue and not self._pending:
+            self.stats.queued = self._backlog_locked()
+            if not self._queue and not self._pending and not self._in_flight:
                 self._force = False
                 self._idle.set()
 
@@ -309,7 +368,6 @@ class LogBuffer:
             self._retry(batch, None, error)
             return
 
-        self.stats.batches_sent += 1
         if 200 <= response.status < 300:
             self._accepted(batch, response.json())
             return
@@ -335,6 +393,7 @@ class LogBuffer:
 
     def _accepted(self, batch: _Batch, body: Any) -> None:
         self.stats.sent += len(batch.records)
+        self.stats.batches_sent += 1
         if isinstance(body, dict):
             self.stats.accepted += int(body.get("accepted") or 0)
             self.stats.duplicates += int(body.get("duplicates") or 0)
@@ -368,6 +427,7 @@ class LogBuffer:
             len(batch.records),
         )
         with self._lock:
+            self._release_locked(batch)
             self._pending.appendleft(second)
             self._pending.appendleft(first)
             self._wake.notify_all()
@@ -388,6 +448,7 @@ class LogBuffer:
         if delay is None:
             delay = min(2.0 ** (batch.attempts - 1), self._config.max_backoff)
         with self._lock:
+            self._release_locked(batch)
             self._pending.appendleft(batch)
             self._not_before = time.monotonic() + delay
             self._wake.notify_all()

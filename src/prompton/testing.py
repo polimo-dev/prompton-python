@@ -39,7 +39,7 @@ def make_snapshot(
                 "model": "openai/gpt-4o-mini",
                 "provider": "openrouter",
                 "messages": [{"role": "user", "content": "Say hello to {{ name }}."}],
-                "prompts": {"ko": [{"role": "user", "content": "{{ name }}님 안녕."}]},
+                "prompts": {"terse": [{"role": "user", "content": "Hi {{ name }}."}]},
                 "params": {"temperature": 0.2},
                 "default_params": {"max_tokens": 256},
                 "provider_options": {"only": ["OpenAI"]},

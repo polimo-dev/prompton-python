@@ -51,7 +51,7 @@ class TestConfig:
 
     def test_the_project_comes_from_the_key_when_not_given(self, monkeypatch):
         monkeypatch.delenv("PTN_PROJECT", raising=False)
-        assert project_from_api_key("ptn_sdkfixture_6yfe6v2ipbld") == "sdkfixture"
+        assert project_from_api_key("ptn_sdkfixture_abcdefghijkl") == "sdkfixture"
         assert project_from_api_key("ptn_my_project_abc") == "my_project"
         assert project_from_api_key(None) is None
         assert Config.build(api_key="ptn_sdkfixture_abc").project == "sdkfixture"

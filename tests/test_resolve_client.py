@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from prompton.config import Config
-from prompton.errors import APIError
+from prompton.errors import APIError, ConfigurationError, SnapshotUnavailableError
 from prompton.resolve_client import ResolveClient
 
 from .conftest import FakeTransport, json_response, transport_error
@@ -102,6 +102,48 @@ def test_without_a_cached_answer_the_error_reaches_the_caller():
         client.resolve("greeting")
     assert error.value.status == 404
     assert error.value.details["reason"] == "unresolved"
+
+
+class TestNoRemoteCallsAreEverMade:
+    """``/resolve`` is a network call, and three configurations forbid network calls."""
+
+    def test_test_mode_makes_no_request_at_all(self):
+        transport = FakeTransport(lambda call: json_response(200, ANSWER))
+        client = build(transport, mode="test")
+        with pytest.raises(ConfigurationError, match="test mode"):
+            client.resolve("greeting", variables={"name": "Ada"})
+        assert transport.requests == []
+
+    def test_offline_mode_makes_no_request_at_all(self):
+        transport = FakeTransport(lambda call: json_response(200, ANSWER))
+        client = build(transport, mode="offline")
+        with pytest.raises(SnapshotUnavailableError, match="offline"):
+            client.resolve("greeting")
+        assert transport.requests == []
+
+    def test_without_an_api_key_no_unauthenticated_request_goes_out(self):
+        transport = FakeTransport(lambda call: json_response(200, ANSWER))
+        client = build(transport, api_key=None)
+        with pytest.raises(SnapshotUnavailableError, match="PTN_API_KEY"):
+            client.resolve("greeting")
+        assert transport.requests == []
+
+    def test_a_cached_answer_is_still_served_when_the_key_goes_away(self):
+        transport = FakeTransport(lambda call: json_response(200, ANSWER))
+        client = build(transport)
+        client.resolve("greeting")
+
+        client._config = Config.build(host="http://localhost:4000", disk_cache=False)
+        resolved = client.resolve("greeting", variables={"name": "Ada"})
+        assert resolved.messages[1]["content"] == "Say hello to Ada."
+        assert len(transport.requests) == 1
+
+    def test_render_locally_false_is_refused_too(self):
+        transport = FakeTransport(lambda call: json_response(200, ANSWER))
+        client = build(transport, mode="offline")
+        with pytest.raises(SnapshotUnavailableError):
+            client.resolve("greeting", variables={"name": "Ada"}, render_locally=False)
+        assert transport.requests == []
 
 
 def test_a_text_use_case_renders_the_text_field():

@@ -12,9 +12,10 @@ from typing import Any
 
 import pytest
 
-from prompton import payload, resolver, stop_kind, template
+from prompton import PromptOn, generation, payload, resolver, stop_kind, template
 from prompton.errors import (
     MissingVariableError,
+    ProviderError,
     RenderError,
     TemplateSyntaxError,
     UnknownPromptError,
@@ -44,14 +45,33 @@ def _render_outcome(case: dict[str, Any]) -> dict[str, Any]:
         return {"error": "render_error"}
 
 
+# Reference behaviour this SDK need not reproduce - but it must still be pinned, or a change here
+# would go unnoticed. The reference's own answer is in ``case["expect"]``; these are ours.
+NON_NORMATIVE: dict[str, dict[str, Any]] = {
+    # this SDK implements only the whitelisted filters, so an unknown one is a render error
+    "nonnormative/unknown_filter_is_applied_at_render_time": {"error": "render_error"},
+    # lint rejects whitespace control, the renderer honours it - same as the reference
+    "nonnormative/whitespace_control_renders": {"output": "x"},
+    # a map in an output position is language-specific; Python writes compact JSON
+    "nonnormative/map_value_stringification": {"output": '{"a":1}'},
+    # a false condition reading an undefined variable renders empty, like the reference
+    "nonnormative/undefined_variable_in_if_condition": {"output": ""},
+}
+
+
 @pytest.mark.parametrize("case", TEMPLATE["cases"], ids=lambda c: c["name"])
 def test_template_render(case: dict[str, Any]) -> None:
     got = _render_outcome(case)
     if case.get("normative", True):
         assert got == case["expect"], case.get("note", "")
     else:
-        # Reference behaviour this SDK need not reproduce; the case still must not crash.
-        assert got
+        assert case["name"] in NON_NORMATIVE, "pin this SDK's answer for the new case"
+        assert got == NON_NORMATIVE[case["name"]], case.get("note", "")
+
+
+def test_every_non_normative_case_is_pinned() -> None:
+    names = {case["name"] for case in TEMPLATE["cases"] if not case.get("normative", True)}
+    assert names == set(NON_NORMATIVE)
 
 
 @pytest.mark.parametrize("case", TEMPLATE["lint_cases"], ids=lambda c: c["name"])
@@ -250,9 +270,132 @@ def test_generation_record_error_without_output() -> None:
     assert "output" not in record
 
 
+def test_generation_record_error_with_usage_preserved() -> None:
+    """A parse failure after the provider answered: the usage and the text are kept."""
+    golden = _golden("chat/error_with_usage_preserved")
+    resolution = resolver.Resolution(
+        use_case="greeting",
+        kind="chat",
+        prompt="default",
+        deployment_id=golden["deployment_id"],
+        deployment_revision=golden["deployment_revision"],
+        prompt_version_id=golden["prompt_version_id"],
+        prompt_version_number=2,
+        engine="liquid",
+        model_id=None,
+        model=golden["model"],
+        provider=golden["provider"],
+        effective_params=golden["params"],
+        resolution_source="remote",
+    )
+    record = build_record(
+        resolution,
+        CallMeta(
+            id=golden["id"],
+            variables=golden["input"]["variables"],
+            input_messages=golden["input"]["messages"],
+            trace_id=golden["trace_id"],
+        ),
+        status="error",
+        started_at=golden["started_at"],
+        latency_ms=golden["latency_ms"],
+        outcome=Outcome(
+            content=golden["output"]["content"],
+            finish_reason=golden["finish_reason"],
+            input_tokens=golden["usage"]["input_tokens"],
+            output_tokens=golden["usage"]["output_tokens"],
+            cost_usd=golden["usage"]["cost_usd"],
+            cost_source=golden["usage"]["cost_source"],
+        ),
+        error=ProviderError(golden["error"]["message"], kind=golden["error"]["kind"]),
+    )
+    record.pop("sdk")
+    assert record == {key: value for key, value in golden.items() if key != "sdk"}
+
+
+def test_generation_record_embedding_success() -> None:
+    """An embedding use case: no prompt, no prompt version, no output."""
+    golden = _golden("embedding/success")
+    resolution = resolver.Resolution(
+        use_case="embed",
+        kind="embedding",
+        prompt=None,
+        deployment_id=golden["deployment_id"],
+        deployment_revision=golden["deployment_revision"],
+        prompt_version_id=None,
+        prompt_version_number=None,
+        engine="liquid",
+        model_id=None,
+        model=golden["model"],
+        provider=golden["provider"],
+        effective_params=golden["params"],
+        resolution_source="disk",
+    )
+    record = build_record(
+        resolution,
+        CallMeta(
+            id=golden["id"],
+            variables=golden["input"]["variables"],
+            trace_id=golden["trace_id"],
+            metadata=golden["metadata"],
+        ),
+        status="ok",
+        started_at=golden["started_at"],
+        latency_ms=golden["latency_ms"],
+        outcome=Outcome(
+            input_tokens=golden["usage"]["input_tokens"],
+            output_tokens=golden["usage"]["output_tokens"],
+            cost_usd=golden["usage"]["cost_usd"],
+            cost_source=golden["usage"]["cost_source"],
+        ),
+    )
+    record.pop("sdk")
+    assert record == {key: value for key, value in golden.items() if key != "sdk"}
+    assert "prompt" not in record and "output" not in record
+
+
+def test_generation_record_manual_log_with_input_text() -> None:
+    """The hand-built record: ``log()`` fills in the evidence and touches nothing else."""
+    golden = _golden("text/manual_log_with_input_text")
+    resolution = resolver.Resolution(
+        use_case="summarize",
+        kind="text",
+        prompt="default",
+        deployment_id=golden["deployment_id"],
+        deployment_revision=golden["deployment_revision"],
+        prompt_version_id=golden["prompt_version_id"],
+        prompt_version_number=1,
+        engine="liquid",
+        model_id=golden["model_id"],
+        model=golden["model"],
+        provider=golden["provider"],
+        resolution_source="bundle",
+    )
+    with PromptOn(mode="test", api_key=None) as client:
+        client.log(
+            {
+                "id": golden["id"],
+                "status": golden["status"],
+                "started_at": golden["started_at"],
+                "input": golden["input"],
+                "output": golden["output"],
+                "finish_reason": golden["finish_reason"],
+                "stop_kind": golden["stop_kind"],
+                "latency_ms": golden["latency_ms"],
+                "usage": golden["usage"],
+            },
+            resolution=resolution,
+        )
+        [record] = client.captured
+    record.pop("sdk")
+    assert record == {key: value for key, value in golden.items() if key != "sdk"}
+
+
 def test_generation_record_required_fields_are_present() -> None:
+    required = GENERATION_RECORD["field_rules"]["required"]
+    assert sorted(generation.REQUIRED_FIELDS) == sorted(required)
     for entry in GENERATION_RECORD["records"]:
-        for name in GENERATION_RECORD["field_rules"]["required"]:
+        for name in required:
             assert name in entry["record"], f"{entry['name']} is missing {name}"
 
 

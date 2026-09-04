@@ -134,6 +134,34 @@ class TestRateLimiting:
         store.refresh(raise_errors=False)
         assert 40 < store.info()["retry_after_seconds"] <= 42
 
+    def test_a_manual_refresh_does_not_break_the_pause_either(self, tmp_path, document):
+        """A readiness probe calling refresh() in a loop must not keep the server rate-limiting."""
+        transport = FakeTransport()
+        transport.push(snapshot_ok(document))
+        store = build(tmp_path, transport)
+        store.start()
+        store.current()
+
+        transport.push(
+            json_response(
+                429,
+                {"error": {"code": "rate_limited", "message": "slow down"}},
+                **{"retry-after": "30"},
+            )
+        )
+        with pytest.raises(APIError):
+            store.refresh()
+        before = len(transport.snapshot_requests)
+
+        for _ in range(3):
+            with pytest.raises(APIError) as error:
+                store.refresh()
+            assert error.value.status == 429
+        assert len(transport.snapshot_requests) == before
+
+        transport.push(snapshot_ok(document))
+        assert store.refresh(force=True) is True, "force= is the documented escape hatch"
+
     def test_failures_back_off_by_doubling_up_to_the_ceiling(self, tmp_path, document):
         transport = FakeTransport()
         transport.push(snapshot_ok(document))
@@ -274,6 +302,44 @@ class TestScopeGuard:
         with pytest.raises(SnapshotUnavailableError):
             store.current()
 
+    def test_a_healthy_server_with_the_wrong_project_says_so(self, tmp_path, document):
+        """The network is fine; blaming it would send the reader hunting the wrong bug."""
+        document["project"] = "sdkfixture"
+        transport = FakeTransport()
+        transport.push(snapshot_ok(document))
+        store = build(tmp_path, transport, project="otherproj", disk_cache=False)
+        store.start()
+
+        with pytest.raises(SnapshotUnavailableError) as error:
+            store.current()
+        message = str(error.value)
+        assert "unreachable" not in message
+        assert "'sdkfixture'" in message and "'otherproj'" in message
+        assert "PTN_PROJECT" in message
+
+    def test_the_scope_message_names_the_environment_too(self, tmp_path, document):
+        document["environment"] = "staging"
+        transport = FakeTransport()
+        transport.push(snapshot_ok(document))
+        store = build(tmp_path, transport, environment="production", disk_cache=False)
+        store.start()
+
+        with pytest.raises(SnapshotUnavailableError) as error:
+            store.current()
+        assert "'staging'" in str(error.value) and "'production'" in str(error.value)
+
+    def test_a_good_document_clears_an_earlier_mismatch(self, tmp_path, document):
+        transport = FakeTransport()
+        transport.push(snapshot_ok({**document, "project": "someone-else"}))
+        transport.push(snapshot_ok(document))
+        store = build(tmp_path, transport, disk_cache=False)
+        store.start()
+        store.refresh(raise_errors=False)
+        store._not_before = 0.0
+
+        assert store.refresh() is True
+        assert store.current().data.project == "demo"
+
 
 class TestDiskWrites:
     def test_writes_are_atomic_and_leave_no_temporary_file(self, tmp_path, document):
@@ -306,7 +372,48 @@ class TestDiskWrites:
         assert json.loads(exported.read_text())["project"] == "demo"
 
 
+class TestBackgroundRefresh:
+    def test_when_the_poll_thread_is_gone_the_next_call_revalidates(self, tmp_path, document):
+        """This is what a forked worker looks like: poll=True, but no poll thread alive."""
+        transport = FakeTransport(lambda call: snapshot_ok(document))
+        store = build(tmp_path, transport, poll=True, cache_ttl=0.01)
+        store.start()
+        store.current()
+        store.close()  # the thread is gone, exactly as it is after fork()
+        store._stop.clear()
+
+        before = len(transport.snapshot_requests)
+        time.sleep(0.02)
+        store.current()  # returns the cached document immediately, refreshes behind it
+        deadline = time.monotonic() + 2
+        while len(transport.snapshot_requests) == before and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(transport.snapshot_requests) > before
+
+
 class TestModes:
+    def test_test_mode_reads_neither_the_disk_cache_nor_a_bundle(self, tmp_path, document):
+        """A test-mode client must behave the same on a laptop with a warm cache and in CI."""
+        (tmp_path / "snapshot.json").write_text(json.dumps(document))
+        bundle = tmp_path / "bundle.json"
+        bundle.write_text(json.dumps(document))
+        config = Config.build(
+            api_key="ptn_demo_key",
+            host="http://localhost:4000",
+            project="demo",
+            disk_cache=str(tmp_path / "snapshot.json"),
+            bundle=str(bundle),
+            mode="test",
+        )
+        assert config.disk_cache_path is None and config.bundle_path is None
+
+        transport = FakeTransport()
+        store = SnapshotStore(config, transport)
+        store.start()
+        with pytest.raises(SnapshotUnavailableError, match="load_snapshot"):
+            store.current()
+        assert transport.requests == []
+
     def test_offline_mode_never_touches_the_network(self, tmp_path, document):
         (tmp_path / "snapshot.json").write_text(json.dumps(document))
         transport = FakeTransport()

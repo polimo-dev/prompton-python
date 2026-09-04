@@ -172,9 +172,13 @@ class PromptOn:
 
     # -- snapshot ----------------------------------------------------------
 
-    def refresh(self) -> bool:
-        """Fetch the snapshot once, now, and wait. ``True`` when a new document was installed."""
-        return self._store.refresh(raise_errors=True)
+    def refresh(self, *, force: bool = False) -> bool:
+        """Fetch the snapshot once, now, and wait. ``True`` when a new document was installed.
+
+        An active ``Retry-After`` pause is honoured here too, so calling this from a readiness
+        probe cannot keep a rate-limited server busy; ``force=True`` overrides it.
+        """
+        return self._store.refresh(raise_errors=True, force=force)
 
     def snapshot(self) -> SnapshotData:
         """The decoded document currently in use."""

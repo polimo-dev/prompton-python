@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import Config
-from .errors import APIError, TransportError
+from .errors import APIError, ConfigurationError, SnapshotUnavailableError, TransportError
 from .http import Transport, build_headers, parse_api_error, retry_after_seconds
 from .template import render as render_template
 from .template import render_messages
@@ -116,11 +116,16 @@ class ResolveClient:
         costs a request every time and skips the cache, but it is the exact reference behaviour -
         useful when you want to see what the server itself produces, including its ``400`` for a
         missing variable.
+
+        This is a network call, so it is refused in test mode, and in offline mode or without an
+        API key it serves a cached answer if there is one and otherwise says why it cannot.
         """
         environment = environment or self._config.environment
+        key = (use_case, prompt or "default", environment)
+        if not self._config.remote_enabled:
+            return self._without_remote(key, variables)
         if not render_locally:
             return self._request(use_case, prompt, environment, variables)
-        key = (use_case, prompt or "default", environment)
 
         with self._lock:
             entry = self._cache.get(key)
@@ -150,6 +155,28 @@ class ResolveClient:
             self._failures = 0
             self._not_before = 0.0
         return answer.rendered(variables)
+
+    def _without_remote(
+        self, key: tuple[str, str, str], variables: Mapping[str, Any] | None
+    ) -> RemoteResolution:
+        """No remote calls are allowed: serve the cached answer, or say why there is none."""
+        if self._config.mode == "test":
+            raise ConfigurationError(
+                "resolve_remote() is a network call and test mode makes none; load a document "
+                "with load_snapshot() and use resolve() instead"
+            )
+        with self._lock:
+            entry = self._cache.get(key)
+        if entry is not None:
+            return entry.value.rendered(variables)
+        if self._config.mode == "offline":
+            raise SnapshotUnavailableError(
+                "offline mode makes no remote calls, and no /resolve answer is cached for "
+                f"{key[0]!r}; use resolve() against the disk cache or the bundle instead"
+            )
+        raise SnapshotUnavailableError(
+            "no API key configured: set PTN_API_KEY or pass api_key= to use the network"
+        )
 
     def _request(
         self,
