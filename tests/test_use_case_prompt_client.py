@@ -6,7 +6,7 @@ import pytest
 
 from prompton.config import Config
 from prompton.errors import APIError, ConfigurationError, UseCaseDocumentUnavailableError
-from prompton.resolve_client import ResolveClient
+from prompton.use_case_prompt_client import UseCasePromptClient
 
 from .conftest import FakeTransport, json_response, transport_error
 
@@ -32,7 +32,7 @@ ANSWER = {
 }
 
 
-def build(transport, **options) -> ResolveClient:
+def build(transport, **options) -> UseCasePromptClient:
     settings = {
         "api_key": "ptn_demo_key",
         "host": "http://localhost:4000",
@@ -40,7 +40,7 @@ def build(transport, **options) -> ResolveClient:
         "cache_ttl": 10.0,
     }
     settings.update(options)
-    return ResolveClient(Config.build(**settings), transport)
+    return UseCasePromptClient(Config.build(**settings), transport)
 
 
 def test_the_raw_answer_is_fetched_once_and_rendered_locally():

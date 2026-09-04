@@ -19,7 +19,7 @@ from .params import stringify_keys
 __all__ = [
     "SCHEMA_VERSION",
     "Deployment",
-    "InvalidSnapshotError",
+    "InvalidUseCaseDocumentError",
     "Model",
     "PromptVersion",
     "UnsupportedSchemaVersionError",
@@ -37,11 +37,11 @@ _VARIABLE_TYPES = ("string", "number", "boolean", "list", "map")
 DEFAULT_MAX_BYTES = 262_144
 
 
-class InvalidSnapshotError(PromptOnError):
+class InvalidUseCaseDocumentError(PromptOnError):
     """The document is not a use-case document the SDK can read."""
 
 
-class UnsupportedSchemaVersionError(InvalidSnapshotError):
+class UnsupportedSchemaVersionError(InvalidUseCaseDocumentError):
     """The document announces a schema version this SDK does not read."""
 
     def __init__(self, version: int) -> None:
@@ -151,11 +151,13 @@ class UseCaseDocument:
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> UseCaseDocument:
-        """Decode a JSON document. Raises :class:`InvalidSnapshotError`."""
+        """Decode a JSON document. Raises :class:`InvalidUseCaseDocumentError`."""
         try:
             document = json.loads(raw)
         except (ValueError, UnicodeDecodeError) as error:
-            raise InvalidSnapshotError(f"use-case document is not valid JSON: {error}") from error
+            raise InvalidUseCaseDocumentError(
+                f"use-case document is not valid JSON: {error}"
+            ) from error
         return cls.from_mapping(document)
 
     @classmethod
@@ -164,14 +166,14 @@ class UseCaseDocument:
         if isinstance(document, UseCaseDocument):
             return document
         if not isinstance(document, Mapping):
-            raise InvalidSnapshotError("use-case document must be an object")
+            raise InvalidUseCaseDocumentError("use-case document must be an object")
 
         warnings: list[str] = []
         version = _schema_version(document)
 
         raw_use_cases = document.get("use_cases")
         if not isinstance(raw_use_cases, Mapping):
-            raise InvalidSnapshotError("use_cases is required and must be an object")
+            raise InvalidUseCaseDocumentError("use_cases is required and must be an object")
 
         use_cases = {
             str(key): _decode_use_case(str(key), value, warnings)
@@ -200,9 +202,11 @@ class UseCaseDocument:
 def _schema_version(document: Mapping[str, Any]) -> int:
     raw = document.get("schema_version")
     if raw is None:
-        raise InvalidSnapshotError("schema_version is required")
+        raise InvalidUseCaseDocumentError("schema_version is required")
     if not isinstance(raw, int) or isinstance(raw, bool):
-        raise InvalidSnapshotError(f"schema_version must be integer {SCHEMA_VERSION}, got {raw!r}")
+        raise InvalidUseCaseDocumentError(
+            f"schema_version must be integer {SCHEMA_VERSION}, got {raw!r}"
+        )
     if raw == SCHEMA_VERSION:
         return raw
     raise UnsupportedSchemaVersionError(raw)

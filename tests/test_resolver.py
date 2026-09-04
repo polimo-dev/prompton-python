@@ -6,7 +6,7 @@ from prompton.errors import UnknownPromptError, UnknownUseCaseError, UnresolvedE
 from prompton.resolver import prompt_names, resolve
 from prompton.snapshot_data import (
     SCHEMA_VERSION,
-    InvalidSnapshotError,
+    InvalidUseCaseDocumentError,
     UnsupportedSchemaVersionError,
     UseCaseDocument,
 )
@@ -108,19 +108,19 @@ class TestSnapshotDecoding:
     def test_legacy_version_field_is_not_a_schema_version(self):
         document = make_use_case_document(greeting={"messages": []})
         document["version"] = document.pop("schema_version")
-        with pytest.raises(InvalidSnapshotError, match="schema_version is required"):
+        with pytest.raises(InvalidUseCaseDocumentError, match="schema_version is required"):
             UseCaseDocument.from_mapping(document)
 
     def test_missing_schema_version_is_refused_even_when_deployments_exist(self):
         document = make_use_case_document(greeting={"messages": []})
         document.pop("schema_version")
-        with pytest.raises(InvalidSnapshotError, match="schema_version is required"):
+        with pytest.raises(InvalidUseCaseDocumentError, match="schema_version is required"):
             UseCaseDocument.from_mapping(document)
 
     def test_schema_version_must_be_exact_integer_four(self):
         document = make_use_case_document(greeting={"messages": []})
         document["schema_version"] = "4"
-        with pytest.raises(InvalidSnapshotError, match="integer 4"):
+        with pytest.raises(InvalidUseCaseDocumentError, match="integer 4"):
             UseCaseDocument.from_mapping(document)
 
     def test_an_environment_with_no_deployments_is_not_an_error(self):
@@ -138,7 +138,7 @@ class TestSnapshotDecoding:
             resolve(data, "greeting")
 
     def test_invalid_json_and_a_non_object_are_rejected(self):
-        with pytest.raises(InvalidSnapshotError):
+        with pytest.raises(InvalidUseCaseDocumentError):
             UseCaseDocument.from_json(b"{not json")
-        with pytest.raises(InvalidSnapshotError):
+        with pytest.raises(InvalidUseCaseDocumentError):
             UseCaseDocument.from_mapping([1, 2, 3])

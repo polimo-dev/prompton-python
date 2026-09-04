@@ -25,7 +25,6 @@ from .errors import NoTemplateError, ProviderError
 from .generation import CallMeta, Result, build_record, iso_timestamp
 from .http import Transport, UrllibTransport
 from .payload import apply_policy
-from .resolve_client import FilledPrompt, ResolveClient
 from .resolver import Resolution
 from .resolver import prompt_names as _prompt_names
 from .resolver import resolve as _resolve
@@ -33,6 +32,7 @@ from .snapshot_data import UseCaseDocument
 from .store import SnapshotStore
 from .template import render as render_template
 from .template import render_messages
+from .use_case_prompt_client import FilledPrompt, UseCasePromptClient
 from .uuidv7 import uuid7
 
 __all__ = ["PromptOn", "UseCase"]
@@ -172,7 +172,7 @@ class PromptOn:
         self.config = config or Config.build(**options)
         self._transport = transport or UrllibTransport()
         self._store = SnapshotStore(self.config, self._transport)
-        self._resolve_client = ResolveClient(self.config, self._transport)
+        self._use_case_prompt_client = UseCasePromptClient(self.config, self._transport)
         self._buffer = LogBuffer(self.config, self._transport)
         self._captured: list[dict[str, Any]] = []
         self._captured_lock = threading.Lock()
@@ -254,11 +254,11 @@ class PromptOn:
         """Call the prompt endpoint instead of the local use-case document.
 
         The simple path and the smoke test. The raw answer is cached for the same TTL as the
-        snapshot and rendered locally, so this stays cheap when you call it repeatedly. Pass
-        ``render_locally=False`` to let the server render instead - a request every time, and the
-        exact reference behaviour.
+        use-case document and rendered locally, so this stays cheap when you call it repeatedly.
+        Pass ``render_locally=False`` to let the server render instead - a request every time, and
+        the exact reference behaviour.
         """
-        return self._resolve_client.fill(
+        return self._use_case_prompt_client.fill(
             use_case,
             prompt=prompt,
             variables=variables,

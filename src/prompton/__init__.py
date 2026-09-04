@@ -54,12 +54,12 @@ from .errors import (
 )
 from .generation import Result
 from .http import HttpResponse, Transport, UrllibTransport
-from .resolve_client import FilledPrompt
 from .snapshot_data import UseCaseDocument
 from .stop_kind import normalize as normalize_stop_kind
 from .stop_kind import truncated as output_truncated
 from .template import LintReason, variables_of
 from .template import lint as lint_template
+from .use_case_prompt_client import FilledPrompt
 from .uuidv7 import uuid7
 
 __all__ = [

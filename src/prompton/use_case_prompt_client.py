@@ -4,7 +4,7 @@ The server runs the same algorithm as :mod:`prompton.resolver`, so this is the q
 prove a deployment is live and to see exactly how a prompt renders. It is *not* the hot path: it
 costs a request per call. Ask for the raw template once (no ``variables``), cache it for the
 same ten seconds the use-case document uses, and render locally - which is what
-:meth:`ResolveClient.fill` does for you.
+:meth:`UseCasePromptClient.fill` does for you.
 
 When the server rate-limits, fails or cannot be reached, a cached answer is served instead.
 """
@@ -26,7 +26,7 @@ from .http import Transport, build_headers, parse_api_error, retry_after_seconds
 from .template import render as render_template
 from .template import render_messages
 
-__all__ = ["FilledPrompt", "ResolveClient"]
+__all__ = ["FilledPrompt", "UseCasePromptClient"]
 
 log = logging.getLogger("prompton")
 
@@ -90,7 +90,7 @@ class _CacheEntry:
     at: float
 
 
-class ResolveClient:
+class UseCasePromptClient:
     """Calls ``POST /use-cases/{key}/prompt``, caching the raw answer for the configured TTL."""
 
     def __init__(self, config: Config, transport: Transport) -> None:
@@ -110,7 +110,7 @@ class ResolveClient:
         environment: str | None = None,
         render_locally: bool = True,
     ) -> FilledPrompt:
-        """Resolve on the server and render locally.
+        """Fetch the prompt endpoint answer and render locally.
 
         The raw answer (no ``variables`` sent) is cached per use case, prompt and environment for
         ``cache_ttl`` seconds, so repeated calls with different variables cost one request.
