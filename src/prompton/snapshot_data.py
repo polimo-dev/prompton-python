@@ -1,9 +1,9 @@
-"""Decoding ``GET /use-cases`` (schema v4) into the structures the resolver reads.
+"""Decoding ``GET /use-cases`` (schema v4/v5/v6/v7/v5/v6/v7) into the structures the resolver reads.
 
 A deployment revision is a **pin, not a router**: one model plus one pinned prompt version per
 prompt name. Older documents - a stale disk cache, an old bundle - are refused, and the SDK
 keeps polling for a v4 one. Newer and legacy schema shapes are refused too: this SDK reads exactly
-schema v4.
+schema v4/v5/v6/v7/v5/v6/v7.
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ __all__ = [
     "UseCaseDocument",
 ]
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 7
 
-_KINDS = ("chat", "text", "embedding")
+_KINDS = ("chat", "decision", "text", "embedding")
 _ENGINES = ("liquid", "raw")
 _PAYLOAD_MODES = ("full", "hash", "none")
 _VARIABLE_TYPES = ("string", "number", "boolean", "list", "map")
@@ -45,7 +45,9 @@ class UnsupportedSchemaVersionError(InvalidUseCaseDocumentError):
     """The document announces a schema version this SDK does not read."""
 
     def __init__(self, version: int) -> None:
-        super().__init__(f"unsupported schema_version {version}; this SDK reads v{SCHEMA_VERSION}")
+        super().__init__(
+            f"unsupported schema_version {version}; this SDK reads v4-v{SCHEMA_VERSION}"
+        )
         self.version = version
 
 
@@ -91,6 +93,10 @@ class Deployment:
     params: dict[str, Any] = field(default_factory=dict)
     provider_options: dict[str, Any] = field(default_factory=dict)
     prompt_pins: dict[str, str] = field(default_factory=dict)
+    api: str | None = None
+    request_path: str | None = None
+    api: str | None = None
+    request_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +121,12 @@ class PromptVersion:
     engine: str = "liquid"
     messages: tuple[dict[str, Any], ...] | None = None
     text_template: str | None = None
+    kind: str | None = None
+    decision: dict[str, Any] | None = None
+    tools: dict[str, Any] | None = None
+    kind: str | None = None
+    decision: dict[str, Any] | None = None
+    tools: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -171,9 +183,9 @@ class UseCaseDocument:
         warnings: list[str] = []
         version = _schema_version(document)
 
-        raw_use_cases = document.get("use_cases")
+        raw_use_cases = document.get("use_cases") or document.get("prompts")
         if not isinstance(raw_use_cases, Mapping):
-            raise InvalidUseCaseDocumentError("use_cases is required and must be an object")
+            raise InvalidUseCaseDocumentError("use_cases/prompts is required and must be an object")
 
         use_cases = {
             str(key): _decode_use_case(str(key), value, warnings)
@@ -207,7 +219,7 @@ def _schema_version(document: Mapping[str, Any]) -> int:
         raise InvalidUseCaseDocumentError(
             f"schema_version must be integer {SCHEMA_VERSION}, got {raw!r}"
         )
-    if raw == SCHEMA_VERSION:
+    if raw in (4, 5, 6, 7):
         return raw
     raise UnsupportedSchemaVersionError(raw)
 
@@ -312,7 +324,7 @@ def _decode_deployments(raw: Any, warnings: list[str]) -> dict[str, Deployment]:
             warnings.append(f"invalid_deployment: {key}")
             continue
         pins: dict[str, str] = {}
-        raw_pins = value.get("prompt_pins")
+        raw_pins = value.get("prompt_pins") or value.get("template_pins")
         if isinstance(raw_pins, Mapping):
             for name, version_id in raw_pins.items():
                 name_str, id_str = _as_str(name), _as_str(version_id)
@@ -324,12 +336,16 @@ def _decode_deployments(raw: Any, warnings: list[str]) -> dict[str, Deployment]:
             warnings.append(f"invalid_prompt_pins: {key}")
         deployments[str(key)] = Deployment(
             id=_as_str(value.get("id")),
-            use_case_key=_as_str(value.get("use_case_key")) or str(key),
+            use_case_key=(
+                _as_str(value.get("use_case_key")) or _as_str(value.get("prompt_key")) or str(key)
+            ),
             revision=_as_int(value.get("revision")),
             model_id=_as_str(value.get("model_id")),
             params=stringify_keys(value.get("params")),
             provider_options=stringify_keys(value.get("provider_options")),
             prompt_pins=pins,
+            api=_as_str(value.get("api")),
+            request_path=_as_str(value.get("request_path")),
         )
     return deployments
 
@@ -340,11 +356,18 @@ def _decode_prompt_versions(raw: Any, warnings: list[str]) -> dict[str, PromptVe
         messages = _decode_messages(entry.get("messages"), warnings)
         versions[entry_id] = PromptVersion(
             id=entry_id,
-            prompt_id=_as_str(entry.get("prompt_id")),
+            prompt_id=_as_str(entry.get("prompt_id")) or _as_str(entry.get("prompt_template_id")),
             number=_as_int(entry.get("number")),
             engine=_enum(entry.get("engine"), _ENGINES, "liquid", "unknown_engine", warnings),
             messages=messages,
             text_template=_as_str(entry.get("text_template")),
+            kind=_as_str(entry.get("kind")),
+            decision=(
+                stringify_keys(entry.get("decision"))
+                if isinstance(entry.get("decision"), Mapping)
+                else None
+            ),
+            tools=_decode_tools(entry.get("tools"), warnings),
         )
     return versions
 
@@ -360,15 +383,44 @@ def _decode_messages(raw: Any, warnings: list[str]) -> tuple[dict[str, Any], ...
         if not isinstance(entry, Mapping):
             warnings.append(f"invalid_message: {entry!r}")
             continue
-        message: dict[str, Any] = {
-            "role": _as_str(entry.get("role")),
-            "content": _as_str(entry.get("content")) or "",
-        }
-        name = _as_str(entry.get("name"))
-        if name is not None:
-            message["name"] = name
-        messages.append(message)
+        messages.append(dict(entry))
     return tuple(messages)
+
+
+def _decode_tools(raw: Any, warnings: list[str]) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        warnings.append(f"invalid_tools: {raw!r}")
+        return None
+    definitions = raw.get("definitions")
+    if not isinstance(definitions, list):
+        warnings.append("invalid_tools: definitions")
+        return None
+    tools = {"definitions": [dict(item) for item in definitions if isinstance(item, Mapping)]}
+    if "tool_choice" in raw:
+        tools["tool_choice"] = raw.get("tool_choice")
+    if isinstance(raw.get("parallel_tool_calls"), bool):
+        tools["parallel_tool_calls"] = raw.get("parallel_tool_calls")
+    return tools
+
+
+def _decode_tools(raw: Any, warnings: list[str]) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        warnings.append(f"invalid_tools: {raw!r}")
+        return None
+    definitions = raw.get("definitions")
+    if not isinstance(definitions, list):
+        warnings.append("invalid_tools: definitions")
+        return None
+    tools = {"definitions": [dict(item) for item in definitions if isinstance(item, Mapping)]}
+    if "tool_choice" in raw:
+        tools["tool_choice"] = raw.get("tool_choice")
+    if isinstance(raw.get("parallel_tool_calls"), bool):
+        tools["parallel_tool_calls"] = raw.get("parallel_tool_calls")
+    return tools
 
 
 def _decode_models(raw: Any, warnings: list[str]) -> dict[str, Model]:

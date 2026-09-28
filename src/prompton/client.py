@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import json
 import logging
 import os
 import threading
@@ -23,7 +24,7 @@ from .buffer import BufferStats, LogBuffer
 from .config import Config
 from .errors import NoTemplateError, ProviderError
 from .generation import CallMeta, Result, build_record, iso_timestamp
-from .http import Transport, UrllibTransport
+from .http import Transport, UrllibTransport, build_headers, parse_api_error, urlencode
 from .payload import apply_policy
 from .resolver import Resolution
 from .resolver import prompt_names as _prompt_names
@@ -175,6 +176,7 @@ class PromptOn:
         self._use_case_prompt_client = UseCasePromptClient(self.config, self._transport)
         self._buffer = LogBuffer(self.config, self._transport)
         self._captured: list[dict[str, Any]] = []
+        self._captured_events: list[dict[str, Any]] = []
         self._captured_lock = threading.Lock()
         self._closed = False
         self._atexit_registered = False
@@ -306,6 +308,39 @@ class PromptOn:
     def log_id(self) -> str:
         """A UUIDv7 to use as a record id, issued before the provider call."""
         return uuid7()
+
+    def log_events(self, events: list[Mapping[str, Any]]) -> dict[str, Any]:
+        """Submit application-observed trace events immediately.
+
+        The SDK never infers tool execution from model requests. Pass the tool/completion events
+        your app observed; each event must already carry its stable ``event_id`` and ``trace_id``.
+        """
+        prepared = _prepare_trace_events(events)
+        if self.config.mode == "test":
+            with self._captured_lock:
+                self._captured_events.extend(prepared)
+            return {"accepted": len(prepared), "duplicates": 0, "rejected": []}
+        if not self.config.remote_enabled:
+            return {"accepted": 0, "duplicates": 0, "rejected": []}
+
+        query = urlencode({"environment": self.config.environment})
+        url = f"{self.config.base_url}/logs?{query}"
+        body = json.dumps({"logs": [], "events": prepared}, ensure_ascii=False).encode("utf-8")
+        headers = build_headers(self.config.api_key, self.config.user_agent)
+        headers["content-type"] = "application/json"
+        response = self._transport.request(
+            "POST", url, headers=headers, body=body, timeout=self.config.timeout
+        )
+        if 200 <= response.status < 300:
+            result = response.json()
+            return {
+                "accepted": int(result.get("accepted") or 0) if isinstance(result, dict) else 0,
+                "duplicates": int(result.get("duplicates") or 0) if isinstance(result, dict) else 0,
+                "rejected": result.get("rejected")
+                if isinstance(result, dict) and isinstance(result.get("rejected"), list)
+                else [],
+            }
+        raise parse_api_error(response)
 
     def log(
         self,
@@ -556,6 +591,29 @@ class PromptOn:
         with self._captured_lock:
             return list(self._captured)
 
+    @property
+    def captured_events(self) -> list[dict[str, Any]]:
+        """In test mode, the trace events that would have been sent."""
+        with self._captured_lock:
+            return list(self._captured_events)
+
     def clear_captured(self) -> None:
         with self._captured_lock:
             self._captured.clear()
+            self._captured_events.clear()
+
+
+def _prepare_trace_events(events: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(events, list):
+        raise ValueError("trace events must be a list")
+    if len(events) > 500:
+        raise ValueError("trace event batches are limited to 500 events")
+    prepared: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, Mapping):
+            raise ValueError("trace events must be mappings")
+        item = dict(event)
+        sdk = item.get("sdk") if isinstance(item.get("sdk"), Mapping) else {}
+        item["sdk"] = {"name": SDK_NAME, "version": VERSION, **dict(sdk)}
+        prepared.append(item)
+    return prepared

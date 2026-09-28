@@ -276,3 +276,26 @@ Licensed under the Apache License, Version 2.0 - see [LICENSE](LICENSE).
 
 PromptOn is a trademark of Polimo. The license does not grant permission to use the PromptOn name or
 logo; forks and derived services must use a different name.
+
+
+## Trace events
+
+Use `log_events()` when your app has already observed tool calls or completion events and wants them available for eval evidence. The SDK does not execute tools and does not infer these events from provider requests. In live mode it immediately posts `{"logs": [], "events": [...]}` to the logs endpoint; in test mode the submitted events are available on `client.captured_events`.
+
+```python
+client.log_events(
+    [
+        {
+            "event_id": "evt_1",
+            "trace_id": "trace_1",
+            "event_kind": "tool_attempt",
+            "status": "ok",
+            "observed_at": "2026-09-28T00:00:00Z",
+            "tool_call_id": "call_1",
+            "tool_name": "search_diary",
+            "arguments": {"query": "Ada"},
+            "result": {"matches": []},
+        }
+    ]
+)
+```

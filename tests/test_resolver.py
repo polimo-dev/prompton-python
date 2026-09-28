@@ -117,10 +117,10 @@ class TestSnapshotDecoding:
         with pytest.raises(InvalidUseCaseDocumentError, match="schema_version is required"):
             UseCaseDocument.from_mapping(document)
 
-    def test_schema_version_must_be_exact_integer_four(self):
+    def test_schema_version_must_be_supported_integer(self):
         document = make_use_case_document(greeting={"messages": []})
         document["schema_version"] = "4"
-        with pytest.raises(InvalidUseCaseDocumentError, match="integer 4"):
+        with pytest.raises(InvalidUseCaseDocumentError, match="integer"):
             UseCaseDocument.from_mapping(document)
 
     def test_an_environment_with_no_deployments_is_not_an_error(self):

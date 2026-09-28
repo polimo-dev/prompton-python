@@ -295,3 +295,55 @@ class TestModuleLevelClient:
             prompton.close(timeout=0.1)
         assert prompton.get_client() is not client
         prompton.close(timeout=0.1)
+
+
+class TestTraceEvents:
+    def event(self):
+        return {
+            "event_id": "evt-1",
+            "trace_id": "trace-1",
+            "event_kind": "tool_attempt",
+            "status": "ok",
+            "observed_at": "2026-09-28T00:00:00.000Z",
+            "tool_call_id": "call-1",
+            "tool_name": "search",
+            "arguments": {"q": "Ada"},
+            "result": {"matches": []},
+        }
+
+    def test_captures_trace_events_in_test_mode(self):
+        client = PromptOn(mode="test", api_key=None, disk_cache=False, poll=False)
+        event = self.event()
+
+        assert client.log_events([event]) == {"accepted": 1, "duplicates": 0, "rejected": []}
+
+        assert client.captured_events == [
+            {**event, "sdk": {"name": "prompton-python", "version": prompton.VERSION}}
+        ]
+        client.clear_captured()
+        assert client.captured_events == []
+
+    def test_posts_trace_events_to_logs_endpoint(self):
+        transport = FakeTransport()
+        transport.push(json_response(202, {"accepted": 1, "duplicates": 0, "rejected": []}))
+        client = PromptOn(
+            mode="live",
+            api_key="ptn_sdkfixture_key",
+            environment="staging",
+            host="http://ptn.test",
+            disk_cache=False,
+            poll=False,
+            transport=transport,
+        )
+        event = self.event()
+
+        assert client.log_events([event]) == {"accepted": 1, "duplicates": 0, "rejected": []}
+
+        [request] = transport.generation_requests
+        assert request["method"] == "POST"
+        assert request["url"] == "http://ptn.test/api/v1/logs?environment=staging"
+        assert request["body"] == {
+            "logs": [],
+            "events": [{**event, "sdk": {"name": "prompton-python", "version": prompton.VERSION}}],
+        }
+        client.close(timeout=0.1)

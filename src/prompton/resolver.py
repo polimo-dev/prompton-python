@@ -54,6 +54,12 @@ class Resolution:
     messages: tuple[dict[str, Any], ...] | None = None
     text_template: str | None = None
     available_prompts: tuple[str, ...] = ()
+    api: str | None = None
+    request_path: str | None = None
+    tools: dict[str, Any] | None = None
+    api: str | None = None
+    request_path: str | None = None
+    tools: dict[str, Any] | None = None
     input_schema: tuple[Any, ...] = ()
     payload_policy: PayloadPolicy | None = None
     source: ResolutionSource = "remote"
@@ -126,12 +132,13 @@ def resolve(
         if model is None:
             warnings.append(f"missing_model: {deployment.model_id}")
 
-    messages = version.messages if (version and entry.kind == "chat") else None
-    text_template = version.text_template if (version and entry.kind == "text") else None
+    runtime_kind = version.kind or entry.kind if version else entry.kind
+    messages = version.messages if (version and runtime_kind == "chat") else None
+    text_template = version.text_template if (version and runtime_kind == "text") else None
 
     return Resolution(
         use_case=entry.key,
-        kind=entry.kind,
+        kind=runtime_kind,
         prompt=prompt_name,
         deployment_id=deployment.id,
         deployment_revision=deployment.revision,
@@ -150,6 +157,9 @@ def resolve(
         available_prompts=available,
         input_schema=entry.input_schema,
         payload_policy=entry.payload_policy,
+        api=deployment.api,
+        request_path=deployment.request_path,
+        tools=version.tools if (version and runtime_kind == "chat") else None,
         source=source,
         etag=etag,
         warnings=tuple(warnings),

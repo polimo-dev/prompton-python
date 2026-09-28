@@ -99,6 +99,7 @@ __all__ = [
     "get_client",
     "lint_template",
     "log",
+    "log_events",
     "log_id",
     "normalize_stop_kind",
     "output_truncated",
@@ -177,6 +178,11 @@ def filled_prompt(
 def log(record: Mapping[str, Any], **options: Any) -> str:
     """:meth:`PromptOn.log` on the default client."""
     return get_client().log(record, **options)
+
+
+def log_events(events: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """:meth:`PromptOn.log_events` on the default client."""
+    return get_client().log_events(events)
 
 
 def log_id() -> str:

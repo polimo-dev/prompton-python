@@ -3,6 +3,12 @@
 All notable changes to `prompton-sdk` for Python. This project follows
 [semantic versioning](https://semver.org/).
 
+## 0.4.0
+
+- Added schema-v7 prompt documents with chat tool definitions and message slots. Full provider chat messages, including `content: None`, array content, `tool_calls`, `tool_call_id` and native extra fields, are preserved when slot histories are spliced.
+- Prepared runtime evidence now carries deployment `api`, `request_path` and prompt `tools` metadata for provider request construction by applications.
+- Added `PromptOn.log_events()` and module-level `prompton.log_events()` for application-observed trace events. It posts `{"logs": [], "events": [...]}` to `/api/v1/logs?environment=...` and captures events in test mode.
+
 ## 0.2.0
 
 Breaking rename to the final PromptOn runtime vocabulary.

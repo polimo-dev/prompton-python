@@ -911,11 +911,27 @@ def render_messages(
     variables: Mapping[str, Any] | None = None,
     engine: Engine = "liquid",
 ) -> list[dict[str, Any]]:
-    """Render the ``content`` of every message. Other keys (``role``, ``name``) pass through."""
+    """Render static string content and splice native message slots verbatim."""
+    vars_map = variables or {}
     rendered: list[dict[str, Any]] = []
     for message in messages:
+        if message.get("type") == "slot":
+            name = message.get("name")
+            if not isinstance(name, str):
+                raise RenderError("message slot requires a name")
+            if name not in vars_map:
+                raise MissingVariableError(name)
+            value = vars_map[name]
+            if not isinstance(value, list):
+                raise RenderError(f"message slot {name} must be a list")
+            for entry in value:
+                if not isinstance(entry, Mapping):
+                    raise RenderError(f"message slot {name} must contain objects")
+                rendered.append(dict(entry))
+            continue
         item = dict(message)
-        item["content"] = render(str(message.get("content") or ""), variables, engine)
+        if isinstance(message.get("content"), str):
+            item["content"] = render(message["content"], vars_map, engine)
         rendered.append(item)
     return rendered
 
