@@ -210,4 +210,4 @@ def test_with_nothing_cached_a_dead_server_fails_with_a_clear_message(stub, tmp_
 def test_the_transport_turns_a_refused_connection_into_a_transport_error():
     transport = UrllibTransport()
     with pytest.raises(TransportError):
-        transport.request("GET", "http://127.0.0.1:1/api/v1/use-cases", headers={}, timeout=0.5)
+        transport.request("GET", "http://127.0.0.1:1/api/v1/prompts", headers={}, timeout=0.5)

@@ -1,4 +1,4 @@
-"""The ``POST /use-cases/{key}/prompt`` client: the simple path, and the smoke test.
+"""The ``POST /prompts/{key}/render`` client: the simple path, and the smoke test.
 
 The server runs the same algorithm as :mod:`prompton.resolver`, so this is the quickest way to
 prove a deployment is live and to see exactly how a prompt renders. It is *not* the hot path: it
@@ -33,7 +33,7 @@ log = logging.getLogger("prompton")
 
 @dataclass(frozen=True)
 class FilledPrompt:
-    """The body of a ``POST /use-cases/{key}/prompt`` answer, with the prompt rendered."""
+    """The body of a ``POST /prompts/{key}/render`` answer, with the prompt rendered."""
 
     key: str
     kind: str
@@ -58,8 +58,8 @@ class FilledPrompt:
             key=body.get("key", ""),
             kind=body.get("kind", "chat"),
             deployment=body.get("deployment") or {},
-            prompt=body.get("prompt"),
-            prompt_names=list(body.get("prompt_names") or []),
+            prompt=body.get("template", body.get("prompt")),
+            prompt_names=list(body.get("template_names", body.get("prompt_names", [])) or []),
             model=body.get("model"),
             model_id=body.get("model_id"),
             provider=body.get("provider"),
@@ -91,7 +91,7 @@ class _CacheEntry:
 
 
 class UseCasePromptClient:
-    """Calls ``POST /use-cases/{key}/prompt``, caching the raw answer for the configured TTL."""
+    """Calls ``POST /prompts/{key}/render``, caching the raw answer for the configured TTL."""
 
     def __init__(self, config: Config, transport: Transport) -> None:
         self._config = config
@@ -194,14 +194,14 @@ class UseCasePromptClient:
     ) -> FilledPrompt:
         payload: dict[str, Any] = {"environment": environment}
         if prompt is not None:
-            payload["prompt"] = prompt
+            payload["template"] = prompt
         if variables is not None:
             payload["variables"] = dict(variables)
         headers = build_headers(self._config.api_key, self._config.user_agent)
         headers["content-type"] = "application/json"
         response = self._transport.request(
             "POST",
-            f"{self._config.base_url}/use-cases/{quote(use_case, safe='')}/prompt",
+            f"{self._config.base_url}/prompts/{quote(use_case, safe='')}/render",
             headers=headers,
             body=json.dumps(payload).encode("utf-8"),
             timeout=self._config.timeout,
@@ -210,7 +210,7 @@ class UseCasePromptClient:
             body = response.json()
             if not isinstance(body, dict):
                 raise APIError(
-                    response.status, message="the use-case prompt answer was not an object"
+                    response.status, message="the prompt render answer was not an object"
                 )
             return FilledPrompt.from_body(body)
         error = parse_api_error(response)

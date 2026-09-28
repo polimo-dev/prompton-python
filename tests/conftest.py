@@ -74,7 +74,7 @@ class FakeTransport:
 
     @property
     def snapshot_requests(self) -> list[dict[str, Any]]:
-        return [call for call in self.requests if "/use-cases" in call["url"]]
+        return [call for call in self.requests if "/prompts" in call["url"]]
 
     @property
     def generation_requests(self) -> list[dict[str, Any]]:

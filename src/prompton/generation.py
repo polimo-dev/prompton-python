@@ -23,7 +23,7 @@ __all__ = ["ERROR_KINDS", "Result", "build_record", "iso_timestamp"]
 
 ERROR_KINDS = ("http_4xx", "http_5xx", "rate_limited", "timeout", "transport", "parse", "app")
 
-REQUIRED_FIELDS = ("id", "use_case", "model", "status", "started_at")
+REQUIRED_FIELDS = ("id", "prompt_key", "model", "status", "started_at")
 
 
 @dataclass
@@ -150,10 +150,10 @@ def build_record(
 
     record: dict[str, Any] = {
         "id": meta.id or uuid7(),
-        "use_case": resolution.use_case if resolution else None,
+        "prompt_key": resolution.use_case if resolution else None,
         "deployment_id": resolution.deployment_id if resolution else None,
         "deployment_revision": resolution.deployment_revision if resolution else None,
-        "prompt": resolution.prompt if resolution else None,
+        "template": resolution.prompt if resolution else None,
         "prompt_version_id": resolution.prompt_version_id if resolution else None,
         "model_id": resolution.model_id if resolution else None,
         "source": resolution.source if resolution else "manual",

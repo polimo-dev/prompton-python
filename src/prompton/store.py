@@ -386,7 +386,7 @@ class SnapshotStore:
 
     def _get_snapshot(self, etag: str | None) -> HttpResponse:
         query = urlencode({"environment": self._config.environment})
-        url = f"{self._config.base_url}/use-cases?{query}"
+        url = f"{self._config.base_url}/prompts?{query}"
         headers = build_headers(self._config.api_key, self._config.user_agent)
         if etag:
             headers["if-none-match"] = etag

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Fixed runtime compatibility with the current PromptOn prompt API: snapshot fetches now use `GET /api/v1/prompts`, remote render uses `POST /api/v1/prompts/{key}/render` with `template`, and monitoring logs use canonical `prompt_key`/`template` fields.
+- Updated active conformance fixtures to the schema7 prompt contract with native tool messages while keeping existing public use-case aliases.
+
 All notable changes to `prompton-sdk` for Python. This project follows
 [semantic versioning](https://semver.org/).
 

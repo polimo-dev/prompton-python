@@ -1,9 +1,9 @@
-"""Decoding ``GET /use-cases`` (schema v4/v5/v6/v7/v5/v6/v7) into the structures the resolver reads.
+"""Decoding ``GET /prompts`` (schema v4/v5/v6/v7) into the structures the resolver reads.
 
 A deployment revision is a **pin, not a router**: one model plus one pinned prompt version per
 prompt name. Older documents - a stale disk cache, an old bundle - are refused, and the SDK
 keeps polling for a v4 one. Newer and legacy schema shapes are refused too: this SDK reads exactly
-schema v4/v5/v6/v7/v5/v6/v7.
+schema v4/v5/v6/v7.
 """
 
 from __future__ import annotations
@@ -95,8 +95,6 @@ class Deployment:
     prompt_pins: dict[str, str] = field(default_factory=dict)
     api: str | None = None
     request_path: str | None = None
-    api: str | None = None
-    request_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,9 +119,6 @@ class PromptVersion:
     engine: str = "liquid"
     messages: tuple[dict[str, Any], ...] | None = None
     text_template: str | None = None
-    kind: str | None = None
-    decision: dict[str, Any] | None = None
-    tools: dict[str, Any] | None = None
     kind: str | None = None
     decision: dict[str, Any] | None = None
     tools: dict[str, Any] | None = None
@@ -385,24 +380,6 @@ def _decode_messages(raw: Any, warnings: list[str]) -> tuple[dict[str, Any], ...
             continue
         messages.append(dict(entry))
     return tuple(messages)
-
-
-def _decode_tools(raw: Any, warnings: list[str]) -> dict[str, Any] | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, Mapping):
-        warnings.append(f"invalid_tools: {raw!r}")
-        return None
-    definitions = raw.get("definitions")
-    if not isinstance(definitions, list):
-        warnings.append("invalid_tools: definitions")
-        return None
-    tools = {"definitions": [dict(item) for item in definitions if isinstance(item, Mapping)]}
-    if "tool_choice" in raw:
-        tools["tool_choice"] = raw.get("tool_choice")
-    if isinstance(raw.get("parallel_tool_calls"), bool):
-        tools["parallel_tool_calls"] = raw.get("parallel_tool_calls")
-    return tools
 
 
 def _decode_tools(raw: Any, warnings: list[str]) -> dict[str, Any] | None:

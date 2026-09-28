@@ -333,11 +333,15 @@ class PromptOn:
         )
         if 200 <= response.status < 300:
             result = response.json()
+            event_result = result.get("events") if isinstance(result, dict) else None
+            counters = event_result if isinstance(event_result, dict) else result
             return {
-                "accepted": int(result.get("accepted") or 0) if isinstance(result, dict) else 0,
-                "duplicates": int(result.get("duplicates") or 0) if isinstance(result, dict) else 0,
-                "rejected": result.get("rejected")
-                if isinstance(result, dict) and isinstance(result.get("rejected"), list)
+                "accepted": int(counters.get("accepted") or 0) if isinstance(counters, dict) else 0,
+                "duplicates": (
+                    int(counters.get("duplicates") or 0) if isinstance(counters, dict) else 0
+                ),
+                "rejected": counters.get("rejected")
+                if isinstance(counters, dict) and isinstance(counters.get("rejected"), list)
                 else [],
             }
         raise parse_api_error(response)
@@ -358,20 +362,24 @@ class PromptOn:
         the server, a full queue) is counted, never raised.
         """
         item = dict(record)
+        if "prompt_key" not in item and "use_case" in item:
+            item["prompt_key"] = item["use_case"]
+        if "template" not in item and "prompt" in item:
+            item["template"] = item["prompt"]
         item.setdefault("id", uuid7())
         item.setdefault("started_at", iso_timestamp())
         item.setdefault("sdk", {"name": SDK_NAME, "version": VERSION})
 
         resolution = use_case._resolution if use_case is not None else None
         if resolution is not None:
-            item.setdefault("use_case", resolution.use_case)
+            item.setdefault("prompt_key", resolution.use_case)
             item.setdefault("kind", resolution.kind)
             item.setdefault("model", resolution.model)
             item.setdefault("source", resolution.source)
             for key, value in (
                 ("deployment_id", resolution.deployment_id),
                 ("deployment_revision", resolution.deployment_revision),
-                ("prompt", resolution.prompt),
+                ("template", resolution.prompt),
                 ("prompt_version_id", resolution.prompt_version_id),
                 ("model_id", resolution.model_id),
                 ("provider", resolution.provider),
@@ -381,13 +389,13 @@ class PromptOn:
 
         missing = [
             name
-            for name in ("use_case", "model", "status", "started_at")
+            for name in ("prompt_key", "model", "status", "started_at")
             if item.get(name) in (None, "")
         ]
         if missing:
             raise ValueError(
                 f"a monitoring log needs {', '.join(missing)}; pass use_case= to fill in "
-                "use-case and model evidence"
+                "prompt and model evidence"
             )
         if item["status"] not in ("ok", "error"):
             raise ValueError(f"status must be 'ok' or 'error', got {item['status']!r}")
@@ -401,7 +409,7 @@ class PromptOn:
         entry = self._store.peek()
         if entry is None:
             return None
-        use_case = entry.data.use_cases.get(str(item.get("use_case")))
+        use_case = entry.data.use_cases.get(str(item.get("prompt_key") or item.get("use_case")))
         return use_case.payload_policy if use_case else None
 
     def _enqueue(self, item: dict[str, Any], policy: Any) -> None:

@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from prompton import template
 from prompton.resolver import resolve
 from prompton.snapshot_data import UseCaseDocument
@@ -83,3 +86,25 @@ def test_schema7_tools_and_message_slots_preserve_native_messages() -> None:
     assert messages[2]["content"] is None
     assert messages[2]["tool_calls"][0]["id"] == "call_1"
     assert messages[3]["content"] == [{"type": "text", "text": "ok"}]
+
+
+def test_preview_http_contract_preserves_native_history_and_tools() -> None:
+    fixture = json.loads((Path(__file__).parent / "conformance" / "http_contract.json").read_text())
+    doc = UseCaseDocument.from_mapping(fixture["snapshot"])
+    resolution = resolve(doc, fixture["render"]["key"])
+
+    messages = template.render_messages(
+        resolution.messages,
+        {
+            "locale": "ko-KR",
+            "topic": "park walks",
+            "history": fixture["render"]["request"]["body"]["messages"][1:4],
+        },
+    )
+
+    assert messages == fixture["render"]["request"]["body"]["messages"]
+    assert resolution.tools["tool_choice"] == "auto"
+    assert resolution.tools["parallel_tool_calls"] is False
+    definition = resolution.tools["definitions"][0]
+    assert definition["output_schema"]["type"] == "object"
+    assert definition["type"] == "function"

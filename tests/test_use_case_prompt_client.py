@@ -14,8 +14,8 @@ ANSWER = {
     "key": "greeting",
     "kind": "chat",
     "deployment": {"id": "d1", "revision": 1},
-    "prompt": "default",
-    "prompt_names": ["default", "ko"],
+    "template": "default",
+    "template_names": ["default", "ko"],
     "model": "openai/gpt-4o-mini",
     "model_id": "m1",
     "provider": "openrouter",
@@ -55,7 +55,7 @@ def test_the_raw_answer_is_fetched_once_and_rendered_locally():
     assert second.messages[1]["content"] == "Say hello to Bob."
     assert first.key == "greeting"
     assert first.source == "remote"
-    assert transport.requests[0]["url"].endswith("/use-cases/greeting/prompt")
+    assert transport.requests[0]["url"].endswith("/prompts/greeting/render")
     assert transport.requests[0]["body"] == {"environment": "production"}
 
 

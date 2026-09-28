@@ -28,7 +28,7 @@ from prompton.snapshot_data import UseCaseDocument
 from .conftest import load_conformance
 
 TEMPLATE = load_conformance("template")
-RESOLVE = load_conformance("use_case")
+RESOLVE = load_conformance("prompt")
 TRUNCATION = load_conformance("truncation")
 STOP_KIND = load_conformance("stop_kind")
 GENERATION_RECORD = load_conformance("log_record")
@@ -99,17 +99,21 @@ SNAPSHOTS = {name: UseCaseDocument.from_mapping(doc) for name, doc in RESOLVE["d
 def _lookup_result(case: dict[str, Any]) -> dict[str, Any]:
     snapshot = SNAPSHOTS[case["document_ref"]]
     try:
-        resolution = resolver.resolve(snapshot, case["use_case"], case.get("prompt"))
+        resolution = resolver.resolve(
+            snapshot,
+            case.get("prompt_key", case.get("use_case")),
+            case.get("template", case.get("prompt")),
+        )
     except UnknownUseCaseError as error:
-        return {"error": "unknown_use_case", "key": error.use_case}
+        return {"error": "unknown_prompt", "key": error.use_case}
     except UnresolvedError:
         return {"error": "unresolved"}
     except UnknownPromptError as error:
         return {
-            "error": "unknown_prompt",
+            "error": "unknown_template",
             "key": error.use_case,
-            "prompt": error.prompt,
-            "prompt_names": error.prompt_names,
+            "template": error.prompt,
+            "template_names": error.prompt_names,
         }
 
     got: dict[str, Any] = {
@@ -121,8 +125,8 @@ def _lookup_result(case: dict[str, Any]) -> dict[str, Any]:
         "model": resolution.model,
         "model_id": resolution.model_id,
         "provider": resolution.provider,
-        "prompt": resolution.prompt,
-        "prompt_names": list(resolution.prompt_names),
+        "template": resolution.prompt,
+        "template_names": list(resolution.prompt_names),
         "prompt_version": resolution.prompt_version,
         "params": resolution.params,
         "provider_options": resolution.provider_options,
@@ -232,7 +236,7 @@ def test_log_record_shape_matches_the_golden_chat_success() -> None:
         ),
     )
     # The SDK name is this package's, not the reference implementation's.
-    assert record.pop("sdk") == {"name": "prompton-python", "version": "0.4.0"}
+    assert record.pop("sdk") == {"name": "prompton-python", "version": "0.4.1"}
     expected = {key: value for key, value in golden.items() if key != "sdk"}
     assert record == expected
 
@@ -354,7 +358,7 @@ def test_log_record_embedding_success() -> None:
     )
     record.pop("sdk")
     assert record == {key: value for key, value in golden.items() if key != "sdk"}
-    assert "prompt" not in record and "output" not in record
+    assert "template" not in record and "output" not in record
 
 
 def test_log_record_manual_log_with_input_text() -> None:

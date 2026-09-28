@@ -97,7 +97,7 @@ class TestWithGeneration:
         use_case.track(lambda: Result(content="안녕", finish_reason="stop"))
 
         [logged] = client.captured
-        assert logged["prompt"] == "ko"
+        assert logged["template"] == "ko"
         assert logged["prompt_version_id"] == use_case.prompt_version["id"]
 
     def test_failed_named_prompt_render_does_not_poison_following_track_evidence(self, client):
@@ -109,7 +109,7 @@ class TestWithGeneration:
 
         [logged] = client.captured
         assert use_case.prompt == "default"
-        assert logged["prompt"] == "default"
+        assert logged["template"] == "default"
         assert logged["prompt_version_id"] == use_case.prompt_version["id"]
 
     def test_a_provider_error_is_logged_with_its_kind_and_then_re_raised(self, client):
@@ -197,7 +197,7 @@ class TestLog:
         use_case = client.use_case("greeting")
         client.log({"status": "ok"}, use_case=use_case)
         [logged] = client.captured
-        assert logged["use_case"] == "greeting"
+        assert logged["prompt_key"] == "greeting"
         assert logged["model"] == use_case.model
         assert logged["deployment_revision"] == use_case.deployment["revision"]
         assert logged["source"] == "manual"
@@ -224,7 +224,7 @@ class TestLog:
         )
         [logged] = client.captured
         assert "input" not in logged and "output" not in logged
-        assert logged["use_case"] == "secret"
+        assert logged["prompt_key"] == "secret"
         client.close(timeout=0.1)
 
     def test_redaction_and_end_user_hashing_are_applied(self, snapshot_document):
@@ -325,7 +325,17 @@ class TestTraceEvents:
 
     def test_posts_trace_events_to_logs_endpoint(self):
         transport = FakeTransport()
-        transport.push(json_response(202, {"accepted": 1, "duplicates": 0, "rejected": []}))
+        transport.push(
+            json_response(
+                202,
+                {
+                    "accepted": 1,
+                    "duplicates": 0,
+                    "rejected": [],
+                    "events": {"accepted": 2, "duplicates": 0, "rejected": []},
+                },
+            )
+        )
         client = PromptOn(
             mode="live",
             api_key="ptn_sdkfixture_key",
@@ -337,7 +347,7 @@ class TestTraceEvents:
         )
         event = self.event()
 
-        assert client.log_events([event]) == {"accepted": 1, "duplicates": 0, "rejected": []}
+        assert client.log_events([event]) == {"accepted": 2, "duplicates": 0, "rejected": []}
 
         [request] = transport.generation_requests
         assert request["method"] == "POST"

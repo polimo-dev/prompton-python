@@ -1,0 +1,400 @@
+{
+  "render": {
+    "api": "chat_completions",
+    "deployment": {
+      "id": "01a0e6e7-64f7-7c52-8c41-f42609bc8430",
+      "revision": 1
+    },
+    "etag": "sha256-09840956cad25d04ea28ca279aa038a31cf9504cdaeacad94c90208c2ee9557b",
+    "key": "sdk_tool_history_1790580319150",
+    "kind": "chat",
+    "messages": [
+      {
+        "content": "You answer from diary history when useful. Locale: ko-KR.",
+        "role": "system"
+      },
+      {
+        "content": "지난 산책 일기를 찾아줘",
+        "role": "user"
+      },
+      {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"query\":\"park walks\",\"limit\":1}",
+              "name": "search_diaries"
+            },
+            "id": "call_prior_1",
+            "type": "function"
+          }
+        ]
+      },
+      {
+        "content": [
+          {
+            "text": "{\"entries\":[\"A prior park walk.\"]}",
+            "type": "text"
+          }
+        ],
+        "name": "search_diaries",
+        "role": "tool",
+        "tool_call_id": "call_prior_1"
+      },
+      {
+        "content": "Find diary history about park walks.",
+        "role": "user"
+      },
+      {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"query\":\"{{ topic }}\",\"limit\":2}",
+              "name": "search_diaries"
+            },
+            "id": "call_history_1",
+            "type": "function"
+          }
+        ]
+      },
+      {
+        "content": [
+          {
+            "text": "{\"entries\":[\"A calm walk in the park.\"]}",
+            "type": "text"
+          }
+        ],
+        "name": "search_diaries",
+        "role": "tool",
+        "tool_call_id": "call_history_1"
+      },
+      {
+        "content": "History ready for park walks.",
+        "role": "assistant",
+        "tool_calls": []
+      }
+    ],
+    "model": "openai/gpt-5-tool-fixture-1790580319150",
+    "model_id": "01a0e6e7-64b0-7d80-9370-f30bba45299d",
+    "params": {
+      "max_tokens": 512,
+      "temperature": 0.2
+    },
+    "prompt_version": {
+      "id": "01a0e6e7-64c7-7652-b1b7-065f331b3609",
+      "number": 1
+    },
+    "provider": "openrouter",
+    "provider_options": {
+      "allow_fallbacks": false,
+      "only": [
+        "OpenAI"
+      ]
+    },
+    "request": {
+      "api": "chat_completions",
+      "body": {
+        "max_tokens": 512,
+        "messages": [
+          {
+            "content": "You answer from diary history when useful. Locale: ko-KR.",
+            "role": "system"
+          },
+          {
+            "content": "지난 산책 일기를 찾아줘",
+            "role": "user"
+          },
+          {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"query\":\"park walks\",\"limit\":1}",
+                  "name": "search_diaries"
+                },
+                "id": "call_prior_1",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": [
+              {
+                "text": "{\"entries\":[\"A prior park walk.\"]}",
+                "type": "text"
+              }
+            ],
+            "name": "search_diaries",
+            "role": "tool",
+            "tool_call_id": "call_prior_1"
+          },
+          {
+            "content": "Find diary history about park walks.",
+            "role": "user"
+          },
+          {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"query\":\"{{ topic }}\",\"limit\":2}",
+                  "name": "search_diaries"
+                },
+                "id": "call_history_1",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": [
+              {
+                "text": "{\"entries\":[\"A calm walk in the park.\"]}",
+                "type": "text"
+              }
+            ],
+            "name": "search_diaries",
+            "role": "tool",
+            "tool_call_id": "call_history_1"
+          },
+          {
+            "content": "History ready for park walks.",
+            "role": "assistant",
+            "tool_calls": []
+          }
+        ],
+        "model": "openai/gpt-5-tool-fixture-1790580319150",
+        "parallel_tool_calls": false,
+        "provider": {
+          "allow_fallbacks": false,
+          "only": [
+            "OpenAI"
+          ]
+        },
+        "temperature": 0.2,
+        "tool_choice": "auto",
+        "tools": [
+          {
+            "function": {
+              "description": "Search historical diary entries for relevant memories.",
+              "name": "search_diaries",
+              "parameters": {
+                "properties": {
+                  "limit": {
+                    "maximum": 5,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "query": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            },
+            "type": "function"
+          }
+        ],
+        "usage": {
+          "include": true
+        }
+      },
+      "method": "POST",
+      "path": "/api/v1/chat/completions"
+    },
+    "request_path": "/api/v1/chat/completions",
+    "source": "remote",
+    "template": "default",
+    "template_names": [
+      "default"
+    ],
+    "warnings": []
+  },
+  "snapshot": {
+    "deployments": {
+      "sdk_tool_history_1790580319150": {
+        "api": "chat_completions",
+        "id": "01a0e6e7-64f7-7c52-8c41-f42609bc8430",
+        "model_id": "01a0e6e7-64b0-7d80-9370-f30bba45299d",
+        "params": {
+          "max_tokens": 512,
+          "temperature": 0.2
+        },
+        "provider_options": {
+          "allow_fallbacks": false,
+          "only": [
+            "OpenAI"
+          ]
+        },
+        "request_path": "/api/v1/chat/completions",
+        "revision": 1,
+        "template_pins": {
+          "default": "01a0e6e7-64c7-7652-b1b7-065f331b3609"
+        }
+      }
+    },
+    "environment": "production",
+    "models": {
+      "01a0e6e7-64b0-7d80-9370-f30bba45299d": {
+        "capabilities": [
+          "tools",
+          "streaming"
+        ],
+        "display_name": "GPT-5 Tool Fixture 1790580319150",
+        "id": "01a0e6e7-64b0-7d80-9370-f30bba45299d",
+        "metadata": {
+          "description_key": "chat_model.sonnet4"
+        },
+        "model_id": "openai/gpt-5-tool-fixture-1790580319150",
+        "provider": "openrouter",
+        "provider_options": {},
+        "status": "active"
+      }
+    },
+    "project": "sdk-tool-contract-1790580319150",
+    "prompt_versions": {
+      "01a0e6e7-64c7-7652-b1b7-065f331b3609": {
+        "decision": null,
+        "engine": "liquid",
+        "id": "01a0e6e7-64c7-7652-b1b7-065f331b3609",
+        "kind": "chat",
+        "messages": [
+          {
+            "content": "You answer from diary history when useful. Locale: {{ locale | default: \"ko-KR\" }}.",
+            "role": "system"
+          },
+          {
+            "name": "history",
+            "type": "slot"
+          },
+          {
+            "content": "Find diary history about {{ topic }}.",
+            "role": "user"
+          },
+          {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"query\":\"{{ topic }}\",\"limit\":2}",
+                  "name": "search_diaries"
+                },
+                "id": "call_history_1",
+                "type": "function"
+              }
+            ]
+          },
+          {
+            "content": [
+              {
+                "text": "{\"entries\":[\"A calm walk in the park.\"]}",
+                "type": "text"
+              }
+            ],
+            "name": "search_diaries",
+            "role": "tool",
+            "tool_call_id": "call_history_1"
+          },
+          {
+            "content": "History ready for {{ topic }}.",
+            "role": "assistant",
+            "tool_calls": []
+          }
+        ],
+        "number": 1,
+        "prompt_template_id": "01a0e6e7-64b8-7919-bdd1-c33d9b6b5ecc",
+        "text_template": null,
+        "tools": {
+          "definitions": [
+            {
+              "function": {
+                "description": "Search historical diary entries for relevant memories.",
+                "name": "search_diaries",
+                "parameters": {
+                  "properties": {
+                    "limit": {
+                      "maximum": 5,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "query": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "query"
+                  ],
+                  "type": "object"
+                }
+              },
+              "output_examples": [
+                {
+                  "entries": [
+                    "A calm walk in the park."
+                  ]
+                }
+              ],
+              "output_schema": {
+                "properties": {
+                  "entries": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "entries"
+                ],
+                "type": "object"
+              },
+              "type": "function"
+            }
+          ],
+          "parallel_tool_calls": false,
+          "tool_choice": "auto"
+        }
+      }
+    },
+    "prompts": {
+      "sdk_tool_history_1790580319150": {
+        "default_params": {},
+        "id": "01a0e6e7-64b3-7de0-b2f5-faeecbc9db0c",
+        "input_schema": [
+          {
+            "name": "history",
+            "required": false,
+            "type": "list"
+          },
+          {
+            "name": "topic",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "locale",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "kind": "chat",
+        "payload_policy": {
+          "encrypt": true,
+          "max_bytes": 262144,
+          "mode": "full",
+          "retention_days": 30,
+          "sample_rate": 1.0
+        }
+      }
+    },
+    "schema_version": 7
+  }
+}
