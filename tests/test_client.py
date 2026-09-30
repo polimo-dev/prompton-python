@@ -265,7 +265,7 @@ class TestSnapshotSurface:
             poll=False,
             transport=transport,
         )
-        assert client.refresh() is True
+        assert client._store.refresh_all(raise_errors=True, force=True) is True
         bundle = client.export_use_cases(tmp_path / "bundle.json")
         assert json.loads(bundle.read_text())["project"] == "sdkfixture"
 

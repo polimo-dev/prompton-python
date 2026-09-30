@@ -151,7 +151,10 @@ def test_a_repoll_sends_if_none_match_and_gets_a_304(stub, tmp_path):
     client = client_for(stub.host, tmp_path, cache_ttl=0.1)
     try:
         client.use_case("greeting")
-        assert client.refresh() is False  # 304
+        with client._store._lock:
+            client._store._last_attempt["greeting"] -= 10.1
+            client._store._last_success["greeting"] -= 10.1
+        assert client.refresh(key="greeting") is False  # 304
         gets = [call for call in stub.calls if call["method"] == "GET"]
         assert gets[1]["headers"]["if-none-match"] == ETAG
     finally:
@@ -164,6 +167,9 @@ def test_a_429_pauses_and_the_caller_never_sees_an_error(stub, tmp_path):
         client.use_case("greeting")
         stub.snapshot_status = 429
         stub.retry_after = "45"
+        with client._store._lock:
+            client._store._last_attempt["greeting"] -= 10.1
+            client._store._last_success["greeting"] -= 10.1
         client._store.refresh(raise_errors=False, key="greeting")
         assert client.use_cases_info()["retry_after_seconds"] <= 1
 

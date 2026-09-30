@@ -81,13 +81,13 @@ def test_a_forked_child_does_not_resume_config_polling(tmp_path):
     )
     store = SnapshotStore(config, transport)
     store.start()
-    store.current()
+    store.current("greeting")
 
     def work() -> bool:
         before = transport.count
         deadline = time.monotonic() + 0.2
         while time.monotonic() < deadline:
-            store.current()
+            store.current("greeting")
             time.sleep(0.02)
         return transport.count == before
 

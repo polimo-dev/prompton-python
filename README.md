@@ -212,7 +212,8 @@ spends whatever the flush leaves on finishing that last batch. `stats.queued` co
 `stats.batches_sent` counts only batches the server accepted.
 
 Keyed `refresh(key=...)` follows the same one-attempt-per-10-seconds gate as `use_case()`.
-`refresh(force=True, key=...)` is the explicit escape hatch for tools that really mean now.
+`force=True` is accepted for older callers, but it does not bypass the keyed runtime gate;
+explicit export and CLI commands use an internal aggregate fetch path.
 
 From the command line, for CI:
 

@@ -174,8 +174,6 @@ class SnapshotStore:
         with self._lock:
             if self._entry is not None:
                 return self._entry
-        if self._config.remote_enabled:
-            self.refresh(raise_errors=False)
         with self._lock:
             if self._entry is not None:
                 return self._entry
@@ -207,10 +205,7 @@ class SnapshotStore:
             entry = self._entries.get(use_case)
             local = self._local_entry_for_key(use_case)
             cached = entry or local
-            if (
-                entry is not None
-                and now - self._last_success.get(use_case, 0.0) < CONFIG_FETCH_TTL
-            ):
+            if entry is not None and now - self._last_success.get(use_case, 0.0) < CONFIG_FETCH_TTL:
                 return entry
         if cached is None:
             loaded = self._load_local_for_key(use_case)
@@ -226,43 +221,7 @@ class SnapshotStore:
                 if cached is not None:
                     return cached
                 return self.current(None)
-            inflight = self._inflight.get(use_case)
-            if inflight is not None:
-                condition, deadline = inflight
-                while use_case in self._inflight:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    condition.wait(timeout=remaining)
-                entry = self._entries.get(use_case)
-                local = self._local_entry_for_key(use_case)
-                cached = entry or local
-                if cached is not None:
-                    return cached
-                if use_case in self._inflight:
-                    raise UseCaseDocumentUnavailableError(
-                        f"PromptOn is unreachable and nothing is cached for {use_case!r}: "
-                        "request timed out"
-                    )
-            last_attempt = self._last_attempt.get(use_case, 0.0)
-            if last_attempt and now - last_attempt < CONFIG_FETCH_TTL:
-                if cached is not None:
-                    return cached
-                error = self._last_error_by_key.get(use_case)
-                raise UseCaseDocumentUnavailableError(
-                    f"PromptOn is unreachable and nothing is cached for {use_case!r}: {error}"
-                )
-            condition = threading.Condition(self._lock)
-            self._inflight[use_case] = (condition, now + CONFIG_FETCH_TIMEOUT)
-            self._last_attempt[use_case] = now
-        try:
-            self.refresh(raise_errors=False, force=True, key=use_case)
-        finally:
-            with self._lock:
-                inflight = self._inflight.pop(use_case, None)
-                if inflight is not None:
-                    condition, _deadline = inflight
-                    condition.notify_all()
+        self._refresh_key(use_case, raise_errors=False)
         with self._lock:
             entry = self._entries.get(use_case)
             local = self._local_entry_for_key(use_case)
@@ -270,6 +229,8 @@ class SnapshotStore:
             error = self._last_error_by_key.get(use_case)
         if cached is not None:
             return cached
+        if isinstance(error, PromptOnError) and not isinstance(error, TransportError):
+            raise UseCaseDocumentUnavailableError(str(error))
         raise UseCaseDocumentUnavailableError(
             f"PromptOn is unreachable and nothing is cached for {use_case!r}: {error}"
         )
@@ -427,18 +388,74 @@ class SnapshotStore:
     def refresh(
         self, *, raise_errors: bool = True, force: bool = False, key: str | None = None
     ) -> bool:
-        """Fetch once, now, and wait for the answer. ``True`` when a new document was installed.
+        """Fetch one use-case key once, subject to the fixed runtime attempt gate.
 
-        This is the synchronous entry point for scripts. A keyed refresh follows the runtime
-        10-second attempt gate unless ``force=True`` is passed. A ``304`` counts as success and
-        returns ``False``.
+        Normal runtime config fetch is demand-driven per key. A no-key refresh is a
+        compatibility no-op, and ``force`` is kept for older callers without bypassing the
+        keyed 10-second attempt gate. Bulk document fetch remains available through
+        :meth:`refresh_all` for explicit export/CLI flows only.
         """
+        if key is None:
+            return False
+        return self._refresh_key(key, raise_errors=raise_errors)
+
+    def refresh_all(self, *, raise_errors: bool = True, force: bool = False) -> bool:
+        """Fetch the aggregate document for explicit export and CLI commands."""
+        return self._refresh_remote(raise_errors=raise_errors, force=force, key=None, deadline=None)
+
+    def _refresh_key(self, use_case: str, *, raise_errors: bool) -> bool:
+        if self._config.mode == "test":
+            return False
+        if not self._config.remote_enabled:
+            self._warn_no_remote()
+            if raise_errors:
+                raise UseCaseDocumentUnavailableError(
+                    "no API key configured: set PTN_API_KEY or pass api_key= to use the network"
+                )
+            return False
+
+        now = time.monotonic()
+        deadline = now + CONFIG_FETCH_TIMEOUT
+        with self._lock:
+            inflight = self._inflight.get(use_case)
+            if inflight is not None:
+                condition, owner_deadline = inflight
+                while use_case in self._inflight:
+                    remaining = owner_deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    condition.wait(timeout=remaining)
+                return False
+            attempt = self._last_attempt.get(use_case, 0.0)
+            if attempt and now - attempt < CONFIG_FETCH_TTL:
+                return False
+            condition = threading.Condition(self._lock)
+            self._inflight[use_case] = (condition, deadline)
+            self._last_attempt[use_case] = now
+        try:
+            return self._refresh_remote(
+                raise_errors=raise_errors, force=False, key=use_case, deadline=deadline
+            )
+        finally:
+            with self._lock:
+                inflight = self._inflight.pop(use_case, None)
+                if inflight is not None:
+                    condition, _deadline = inflight
+                    condition.notify_all()
+
+    def _refresh_remote(
+        self,
+        *,
+        raise_errors: bool,
+        force: bool,
+        key: str | None,
+        deadline: float | None,
+    ) -> bool:
         if self._config.mode == "test":
             return False
         if not self._config.remote_enabled:
             self._warn_no_remote()
             if self._config.mode == "offline":
-                # offline mode re-reads the files instead of the network
                 with self._lock:
                     self._entry = None
                 return self.load_local() is not None
@@ -449,16 +466,10 @@ class SnapshotStore:
             return False
 
         with self._lock:
-            entry = self._entry
+            entry = self._entries.get(key) if key is not None else self._entry
             pause = self._not_before - time.monotonic()
             last_error = self.last_error
-        if key is not None:
-            with self._lock:
-                entry = self._entries.get(key)
-                attempt = self._last_attempt.get(key, 0.0)
-            if attempt and time.monotonic() - attempt < CONFIG_FETCH_TTL and not force:
-                return False
-        elif pause > 0 and not force:
+        if key is None and pause > 0 and not force:
             if raise_errors:
                 if isinstance(last_error, BaseException):
                     raise last_error
@@ -468,7 +479,6 @@ class SnapshotStore:
                 )
             return False
 
-        deadline = time.monotonic() + CONFIG_FETCH_TIMEOUT if key is not None else None
         try:
             response = self._get_snapshot(entry.etag if entry else None, key=key, deadline=deadline)
             self._ensure_deadline(deadline)

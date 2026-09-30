@@ -42,7 +42,7 @@ def client(tmp_path_factory):
 
 class TestSnapshot:
     def test_the_snapshot_fetch_carries_an_etag_and_the_expected_use_cases(self, client):
-        assert client.refresh() is True
+        assert client._store.refresh_all(raise_errors=True, force=True) is True
         info = client.use_cases_info()
         assert info["source"] == "remote"
         assert info["etag"].startswith('"sha256-')
@@ -51,13 +51,13 @@ class TestSnapshot:
         assert {"greeting", "summarize", "embed"} <= set(snapshot.use_cases)
 
     def test_a_repoll_answers_304_and_changes_nothing(self, client):
-        client.refresh()
+        client.prompt("greeting")
         before = client.use_cases_info()["etag"]
-        assert client.refresh() is False, "an unchanged snapshot must answer 304"
+        assert client.refresh(key="greeting") is False, "an unchanged snapshot must answer 304"
         assert client.use_cases_info()["etag"] == before
 
     def test_the_disk_cache_is_written_and_reused_by_a_cold_client(self, client, tmp_path):
-        client.refresh()
+        client.prompt("greeting")
         cache = client.config.disk_cache_path
         assert cache.exists() and cache.stat().st_size > 0
 
@@ -166,7 +166,7 @@ class TestErrorsMatchTheServer:
         )
         try:
             with pytest.raises(APIError) as error:
-                broken.refresh()
+                broken.refresh(key="greeting")
             assert error.value.status == 401
             assert error.value.code == "unauthorized"
         finally:
@@ -184,7 +184,7 @@ class TestEnvironments:
             timeout=10.0,
         )
         try:
-            assert staging.refresh() is True
+            assert staging._store.refresh_all(raise_errors=True, force=True) is True
             assert staging.use_cases().environment == "staging"
             local = staging.use_case("greeting")
             remote = staging.filled_prompt("greeting", variables={"name": "Ada"})

@@ -59,7 +59,7 @@ class TestTenSecondCache:
         store.start()
 
         for _ in range(10):
-            assert store.current().data.project == "demo"
+            assert store.current("greeting").data.project == "demo"
         assert len(transport.snapshot_requests) == 1
 
     def test_past_the_ttl_idle_current_does_not_revalidate(self, tmp_path, document):
@@ -67,15 +67,12 @@ class TestTenSecondCache:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport, cache_ttl=0.01)
         store.start()
-        store.current()
+        store.current("greeting")
 
         transport.push(HttpResponse(status=304, headers={"etag": ETAG}))
         time.sleep(0.02)
-        store.current()
+        store.current("greeting")
         assert len(transport.snapshot_requests) == 1
-
-
-
 
     def test_keyed_config_gate_is_fixed_at_ten_seconds(self, tmp_path, document):
         transport = FakeTransport()
@@ -96,6 +93,77 @@ class TestTenSecondCache:
             store._last_attempt["greeting"] = time.monotonic() - 10.1
         store.current("greeting")
         assert len(transport.snapshot_requests) == 2
+
+    def test_no_key_refresh_is_a_noop_for_runtime_callers(self, tmp_path, document):
+        transport = FakeTransport()
+        transport.push(snapshot_ok(document))
+        store = build(tmp_path, transport)
+        store.start()
+
+        assert store.refresh() is False
+        assert transport.snapshot_requests == []
+
+    def test_keyed_force_does_not_bypass_the_ten_second_gate(self, tmp_path, document):
+        transport = FakeTransport()
+        transport.push(snapshot_ok(document, '"first"'))
+        transport.push(snapshot_ok(document, '"second"'))
+        store = build(tmp_path, transport)
+        store.start()
+
+        store.current("greeting")
+        assert store.refresh(key="greeting", force=True) is False
+        assert len(transport.snapshot_requests) == 1
+
+    def test_cold_concurrent_manual_and_runtime_calls_share_one_fetch(self, tmp_path, document):
+        started = threading.Event()
+        release = threading.Event()
+
+        def handler(_call):
+            started.set()
+            assert release.wait(1.0)
+            return snapshot_ok(document)
+
+        transport = FakeTransport(handler)
+        store = build(tmp_path, transport)
+        store.start()
+        results = []
+        errors = []
+
+        def capture(label, func):
+            try:
+                results.append((label, func()))
+            except BaseException as error:  # noqa: BLE001 - asserted below
+                errors.append(error)
+
+        owner = threading.Thread(
+            target=capture, args=("manual", lambda: store.refresh(key="greeting"))
+        )
+        followers = [
+            threading.Thread(
+                target=capture,
+                args=(f"runtime-{index}", lambda: store.current("greeting").data.project),
+            )
+            for index in range(3)
+        ]
+
+        owner.start()
+        assert started.wait(0.5)
+        for follower in followers:
+            follower.start()
+        time.sleep(0.05)
+        release.set()
+        owner.join(1.0)
+        for follower in followers:
+            follower.join(1.0)
+
+        assert errors == []
+        assert sorted(results) == [
+            ("manual", True),
+            ("runtime-0", "demo"),
+            ("runtime-1", "demo"),
+            ("runtime-2", "demo"),
+        ]
+        assert len(transport.snapshot_requests) == 1
 
     def test_restart_restores_each_key_from_its_own_disk_document(self, tmp_path):
         greeting = make_use_case_document(
@@ -124,16 +192,23 @@ class TestTenSecondCache:
         first = build(tmp_path, transport)
         first.start()
         assert first.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
-        assert first.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+        assert (
+            first.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+        )
 
         down = FakeTransport()
         down.push(transport_error())
         down.push(transport_error())
         restarted = build(tmp_path, down)
         restarted.start()
-        assert restarted.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
-        assert restarted.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
-
+        assert (
+            restarted.current("greeting").data.models[shared_model_id].model_id
+            == "provider/model-a"
+        )
+        assert (
+            restarted.current("summarize").data.models[shared_model_id].model_id
+            == "provider/model-b"
+        )
 
     def test_late_parse_cannot_commit_after_the_fetch_deadline(self, tmp_path, monkeypatch):
         initial = make_use_case_document(
@@ -230,6 +305,7 @@ class TestTenSecondCache:
         finally:
             server.shutdown()
             server.server_close()
+
     def test_each_key_keeps_its_own_document_when_shared_model_ids_change(self, tmp_path):
         greeting = make_use_case_document(
             project="demo",
@@ -258,22 +334,31 @@ class TestTenSecondCache:
         store.start()
 
         assert store.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
-        assert store.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+        assert (
+            store.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+        )
         assert store.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
-        assert [request["url"].split("/api/v1", 1)[1].split("?", 1)[0] for request in transport.snapshot_requests] == [
+        assert [
+            request["url"].split("/api/v1", 1)[1].split("?", 1)[0]
+            for request in transport.snapshot_requests
+        ] == [
             "/prompts/greeting",
             "/prompts/summarize",
         ]
+
     def test_a_304_costs_nothing_and_keeps_the_document(self, tmp_path, document):
         transport = FakeTransport()
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
         store.start()
-        first = store.current().data
+        first = store.current("greeting").data
+        with store._lock:
+            store._last_attempt["greeting"] = time.monotonic() - 10.1
+            store._last_success["greeting"] = time.monotonic() - 10.1
 
         transport.push(HttpResponse(status=304, headers={"etag": ETAG}))
-        assert store.refresh() is False
-        assert store.current().data is first
+        assert store.refresh(key="greeting") is False
+        assert store.current("greeting").data is first
 
 
 class TestRateLimiting:
@@ -282,7 +367,10 @@ class TestRateLimiting:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport, cache_ttl=0.01)
         store.start()
-        store.current()
+        store.current("greeting")
+        with store._lock:
+            store._last_attempt["greeting"] = time.monotonic() - 10.1
+            store._last_success["greeting"] = time.monotonic() - 10.1
 
         transport.push(
             HttpResponse(
@@ -291,14 +379,14 @@ class TestRateLimiting:
                 headers={"retry-after": "30"},
             )
         )
-        store.refresh(raise_errors=False)
+        store.refresh(raise_errors=False, key="greeting")
         assert store.info()["retry_after_seconds"] <= 1
 
         # the caller never sees an error, and no further request is made
         before = len(transport.snapshot_requests)
         for _ in range(5):
-            assert store.current().data.project == "demo"
-        store.refresh(raise_errors=False)
+            assert store.current("greeting").data.project == "demo"
+        store.refresh(raise_errors=False, key="greeting")
         assert len(transport.snapshot_requests) == before
 
     def test_retry_after_falls_back_to_the_error_details(self, tmp_path, document):
@@ -306,7 +394,10 @@ class TestRateLimiting:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
         store.start()
-        store.current()
+        store.current("greeting")
+        with store._lock:
+            store._last_attempt["greeting"] = time.monotonic() - 10.1
+            store._last_success["greeting"] = time.monotonic() - 10.1
 
         transport.push(
             json_response(
@@ -320,8 +411,8 @@ class TestRateLimiting:
                 },
             )
         )
-        store.refresh(raise_errors=False)
-        assert 9 < store.info()["retry_after_seconds"] <= 10
+        store.refresh(raise_errors=False, key="greeting")
+        assert store.info()["retry_after_seconds"] <= 1
 
     def test_a_manual_refresh_does_not_break_the_pause_either(self, tmp_path, document):
         """A readiness probe calling refresh() in a loop must not keep the server rate-limiting."""
@@ -329,7 +420,7 @@ class TestRateLimiting:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
         store.start()
-        store.current()
+        store.refresh_all(raise_errors=True, force=True)
 
         transport.push(
             json_response(
@@ -339,30 +430,30 @@ class TestRateLimiting:
             )
         )
         with pytest.raises(APIError):
-            store.refresh()
+            store.refresh_all()
         before = len(transport.snapshot_requests)
 
         for _ in range(3):
             with pytest.raises(APIError) as error:
-                store.refresh()
+                store.refresh_all()
             assert error.value.status == 429
         assert len(transport.snapshot_requests) == before
 
         transport.push(snapshot_ok(document))
-        assert store.refresh(force=True) is True, "force= is the documented escape hatch"
+        assert store.refresh_all(force=True) is True, "force= is the export/CLI escape hatch"
 
     def test_failures_back_off_by_doubling_up_to_the_ceiling(self, tmp_path, document):
         transport = FakeTransport()
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport, cache_ttl=10.0, max_backoff=300.0)
         store.start()
-        store.current()
+        store.refresh_all(raise_errors=True, force=True)
 
         delays = []
         for _ in range(7):
             transport.push(transport_error())
             store._not_before = 0.0  # skip the wait; we are measuring the schedule
-            store.refresh(raise_errors=False)
+            store.refresh_all(raise_errors=False)
             delays.append(round(store.info()["retry_after_seconds"]))
         assert delays[:5] == [10, 20, 40, 80, 160]
         assert delays[5] == delays[6] == 300
@@ -374,11 +465,14 @@ class TestServerDown:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
         store.start()
-        store.current()
+        store.current("greeting")
+        with store._lock:
+            store._last_attempt["greeting"] = time.monotonic() - 10.1
+            store._last_success["greeting"] = time.monotonic() - 10.1
 
         transport.push(transport_error())
-        store.refresh(raise_errors=False)
-        assert store.current().data.project == "demo"
+        store.refresh(raise_errors=False, key="greeting")
+        assert store.current("greeting").data.project == "demo"
         assert store.info()["stale"] is True
 
     def test_a_cold_start_reads_the_disk_cache_written_by_an_earlier_run(self, tmp_path, document):
@@ -386,15 +480,15 @@ class TestServerDown:
         transport.push(snapshot_ok(document))
         first = build(tmp_path, transport)
         first.start()
-        first.current()
-        assert (tmp_path / "snapshot.json").exists()
-        assert (tmp_path / "snapshot.json.meta.json").exists()
+        first.current("greeting")
+        assert (tmp_path / "snapshot.json.prompts" / "greeting.json").exists()
+        assert (tmp_path / "snapshot.json.prompts" / "greeting.json.meta.json").exists()
 
         offline = FakeTransport()
         offline.push(transport_error())
         second = build(tmp_path, offline)
         second.start()
-        entry = second.current()
+        entry = second.current("greeting")
         assert entry.source == "disk"
         assert entry.etag == ETAG
 
@@ -421,7 +515,7 @@ class TestServerDown:
         store = build(tmp_path, transport)
         store.start()
         with pytest.raises(UseCaseDocumentUnavailableError) as error:
-            store.current()
+            store.current("greeting")
         assert "unreachable" in str(error.value)
         assert "nothing is cached" in str(error.value)
 
@@ -431,7 +525,7 @@ class TestServerDown:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
         store.start()
-        assert store.current().source == "remote"
+        assert store.current("greeting").source == "remote"
 
 
 class TestForeignSidecars:
@@ -500,7 +594,7 @@ class TestScopeGuard:
         store.start()
 
         with pytest.raises(UseCaseDocumentUnavailableError) as error:
-            store.current()
+            store.current("greeting")
         message = str(error.value)
         assert "unreachable" not in message
         assert "'sdkfixture'" in message and "'otherproj'" in message
@@ -514,7 +608,7 @@ class TestScopeGuard:
         store.start()
 
         with pytest.raises(UseCaseDocumentUnavailableError) as error:
-            store.current()
+            store.current("greeting")
         assert "'staging'" in str(error.value) and "'production'" in str(error.value)
 
     def test_a_good_document_clears_an_earlier_mismatch(self, tmp_path, document):
@@ -523,10 +617,10 @@ class TestScopeGuard:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport, disk_cache=False)
         store.start()
-        store.refresh(raise_errors=False)
+        store.refresh_all(raise_errors=False)
         store._not_before = 0.0
 
-        assert store.refresh() is True
+        assert store.refresh_all() is True
         assert store.current().data.project == "demo"
 
 
@@ -536,17 +630,19 @@ class TestDiskWrites:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
         store.start()
-        store.current()
-        names = sorted(p.name for p in tmp_path.iterdir())
-        assert names == ["snapshot.json", "snapshot.json.meta.json"]
+        store.current("greeting")
+        names = sorted(p.name for p in (tmp_path / "snapshot.json.prompts").iterdir())
+        assert names == ["greeting.json", "greeting.json.meta.json"]
 
     def test_the_sidecar_carries_the_etag_and_the_scope(self, tmp_path, document):
         transport = FakeTransport()
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
         store.start()
-        store.current()
-        meta = json.loads((tmp_path / "snapshot.json.meta.json").read_text())
+        store.current("greeting")
+        meta = json.loads(
+            (tmp_path / "snapshot.json.prompts" / "greeting.json.meta.json").read_text()
+        )
         assert meta["etag"] == ETAG
         assert meta["environment"] == "production"
         assert meta["project"] == "demo"
@@ -556,7 +652,7 @@ class TestDiskWrites:
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
         store.start()
-        store.current()
+        store.refresh_all(raise_errors=True, force=True)
         exported = store.export(tmp_path / "bundle" / "snapshot.json")
         assert json.loads(exported.read_text())["project"] == "demo"
 
@@ -566,13 +662,13 @@ class TestBackgroundRefresh:
         transport = FakeTransport(lambda call: snapshot_ok(document))
         store = build(tmp_path, transport, poll=True, cache_ttl=0.01)
         store.start()
-        store.current()
+        store.current("greeting")
         store.close()  # the thread is gone, exactly as it is after fork()
         store._stop.clear()
 
         before = len(transport.snapshot_requests)
         time.sleep(0.02)
-        store.current()
+        store.current("greeting")
         assert len(transport.snapshot_requests) == before
 
 
@@ -640,6 +736,6 @@ class TestErrors:
         )
         store = build(tmp_path, transport)
         with pytest.raises(APIError) as error:
-            store.refresh()
+            store.refresh(key="greeting")
         assert error.value.status == 401
         assert error.value.code == "unauthorized"

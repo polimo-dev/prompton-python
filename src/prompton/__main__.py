@@ -46,11 +46,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         if args.command == "export":
-            client.refresh(force=True)
+            client._store.refresh_all(raise_errors=True, force=True)
             path = client.export_use_cases(args.out)
             print(f"wrote {path}")
             return 0
-        client.refresh(force=True)
+        client._store.refresh_all(raise_errors=True, force=True)
         print(json.dumps(client.use_cases_info(), indent=2, default=str))
         return 0
     except PromptOnError as error:

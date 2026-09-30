@@ -271,10 +271,11 @@ class PromptOn:
     # -- use-case document -------------------------------------------------
 
     def refresh(self, *, force: bool = False, key: str | None = None) -> bool:
-        """Fetch config once, now. ``key=`` refreshes one use case under the 10s gate.
+        """Fetch one use-case key now, subject to the same 10-second runtime gate.
 
-        Normal runtime config fetch is demand-driven per key. Passing ``force=True`` is the
-        explicit escape hatch for tools that need to bypass the keyed attempt gate.
+        Normal runtime config fetch is demand-driven per key. Calling ``refresh()`` without a
+        key is a compatibility no-op; ``force`` is accepted for older callers but does not bypass
+        the keyed runtime gate.
         """
         return self._store.refresh(raise_errors=True, force=force, key=key)
 
