@@ -3,7 +3,7 @@
     "api": "chat_completions",
     "deployment": {
       "id": "01a0e6e7-64f7-7c52-8c41-f42609bc8430",
-      "revision": 1
+      "revision": "v2026.09.30-1"
     },
     "etag": "sha256-09840956cad25d04ea28ca279aa038a31cf9504cdaeacad94c90208c2ee9557b",
     "key": "sdk_tool_history_1790580319150",
@@ -234,7 +234,7 @@
           ]
         },
         "request_path": "/api/v1/chat/completions",
-        "revision": 1,
+        "revision": "v2026.09.30-1",
         "template_pins": {
           "default": "01a0e6e7-64c7-7652-b1b7-065f331b3609"
         }

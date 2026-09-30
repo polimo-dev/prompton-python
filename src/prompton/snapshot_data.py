@@ -88,7 +88,7 @@ class Deployment:
 
     id: str | None
     use_case_key: str
-    revision: int | None = None
+    revision: str | None = None
     model_id: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
     provider_options: dict[str, Any] = field(default_factory=dict)
@@ -229,6 +229,16 @@ def _as_str(value: Any) -> str | None:
     return None
 
 
+def _as_revision(value: Any, key: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    raise InvalidUseCaseDocumentError(
+        f"deployment {key} revision must be a string like v2026.09.30-1"
+    )
+
+
 def _as_int(value: Any, default: int | None = None) -> int | None:
     if isinstance(value, bool):
         return default
@@ -334,7 +344,7 @@ def _decode_deployments(raw: Any, warnings: list[str]) -> dict[str, Deployment]:
             use_case_key=(
                 _as_str(value.get("use_case_key")) or _as_str(value.get("prompt_key")) or str(key)
             ),
-            revision=_as_int(value.get("revision")),
+            revision=_as_revision(value.get("revision"), str(key)),
             model_id=_as_str(value.get("model_id")),
             params=stringify_keys(value.get("params")),
             provider_options=stringify_keys(value.get("provider_options")),

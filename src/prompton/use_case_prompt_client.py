@@ -23,6 +23,7 @@ from urllib.parse import quote
 from .config import Config
 from .errors import APIError, ConfigurationError, TransportError, UseCaseDocumentUnavailableError
 from .http import Transport, build_headers, parse_api_error, retry_after_seconds
+from .snapshot_data import InvalidUseCaseDocumentError
 from .template import render as render_template
 from .template import render_messages
 
@@ -54,10 +55,18 @@ class FilledPrompt:
 
     @classmethod
     def from_body(cls, body: Mapping[str, Any]) -> FilledPrompt:
+        deployment = body.get("deployment") or {}
+        if not isinstance(deployment, Mapping):
+            raise InvalidUseCaseDocumentError("prompt render deployment must be an object")
+        revision = deployment.get("revision")
+        if revision is not None and not isinstance(revision, str):
+            raise InvalidUseCaseDocumentError(
+                "prompt render deployment revision must be a string like v2026.09.30-1"
+            )
         return cls(
             key=body.get("key", ""),
             kind=body.get("kind", "chat"),
-            deployment=body.get("deployment") or {},
+            deployment=dict(deployment),
             prompt=body.get("template", body.get("prompt")),
             prompt_names=list(body.get("template_names", body.get("prompt_names", [])) or []),
             model=body.get("model"),

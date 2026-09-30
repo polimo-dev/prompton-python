@@ -141,7 +141,8 @@ apps rely on sending `"only": null` to clear a provider restriction.
 ### Prompt lookup
 
 A deployment revision is a **pin**, not a router. It is one model plus one pinned prompt version
-per prompt name. At request time the only selection axis is the prompt name (default `"default"`),
+per prompt name. Revision values are strings like `v2026.09.30-1`, using the UTC creation date.
+At request time the only selection axis is the prompt name (default `"default"`),
 and the environment is a request parameter that decides which prompt document you fetched.
 
 * Unknown prompt key → `unknown_template_key`.

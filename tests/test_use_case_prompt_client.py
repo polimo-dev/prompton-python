@@ -6,6 +6,7 @@ import pytest
 
 from prompton.config import Config
 from prompton.errors import APIError, ConfigurationError, UseCaseDocumentUnavailableError
+from prompton.snapshot_data import InvalidUseCaseDocumentError
 from prompton.use_case_prompt_client import UseCasePromptClient
 
 from .conftest import FakeTransport, json_response, transport_error
@@ -13,7 +14,7 @@ from .conftest import FakeTransport, json_response, transport_error
 ANSWER = {
     "key": "greeting",
     "kind": "chat",
-    "deployment": {"id": "d1", "revision": 1},
+    "deployment": {"id": "d1", "revision": "v2026.09.30-1"},
     "template": "default",
     "template_names": ["default", "ko"],
     "model": "openai/gpt-4o-mini",
@@ -106,6 +107,15 @@ def test_without_a_cached_answer_the_error_reaches_the_caller():
         client.fill("greeting")
     assert error.value.status == 404
     assert error.value.details["reason"] == "unresolved"
+
+
+def test_numeric_deployment_revision_in_prompt_render_response_is_rejected():
+    answer = {**ANSWER, "deployment": {"id": "d1", "revision": 1}}
+    transport = FakeTransport(lambda call: json_response(200, answer))
+    client = build(transport)
+
+    with pytest.raises(InvalidUseCaseDocumentError, match="revision must be a string"):
+        client.fill("greeting")
 
 
 class TestNoRemoteCallsAreEverMade:

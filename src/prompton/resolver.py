@@ -42,7 +42,7 @@ class Resolution:
     kind: str
     prompt: str | None
     deployment_id: str | None
-    deployment_revision: int | None
+    deployment_revision: str | None
     prompt_version_id: str | None
     prompt_version_number: int | None
     engine: str

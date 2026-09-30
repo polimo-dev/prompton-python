@@ -123,6 +123,12 @@ class TestSnapshotDecoding:
         with pytest.raises(InvalidUseCaseDocumentError, match="integer"):
             UseCaseDocument.from_mapping(document)
 
+    def test_deployment_revision_must_be_a_string(self):
+        document = make_use_case_document(greeting={"messages": []})
+        document["deployments"]["greeting"]["revision"] = 1
+        with pytest.raises(InvalidUseCaseDocumentError, match="revision must be a string"):
+            UseCaseDocument.from_mapping(document)
+
     def test_an_environment_with_no_deployments_is_not_an_error(self):
         data = UseCaseDocument.from_mapping(
             {

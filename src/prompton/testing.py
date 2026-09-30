@@ -46,7 +46,7 @@ def make_use_case_document(
                 "default_params": {"max_tokens": 256},
                 "provider_options": {"only": ["OpenAI"]},
                 "payload_policy": {"mode": "full", "sample_rate": 1.0, "max_bytes": 262144},
-                "revision": 1,
+                "revision": "v2026.09.30-1",
             },
         )
     """
@@ -104,7 +104,7 @@ def make_use_case_document(
 
         document["deployments"][key] = {
             "id": f"deployment-{index:04d}",
-            "revision": spec.get("revision", 1),
+            "revision": spec.get("revision", "v2026.09.30-1"),
             "model_id": model_key,
             "params": spec.get("params", {}),
             "provider_options": spec.get("provider_options", {}),
