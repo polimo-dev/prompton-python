@@ -96,6 +96,79 @@ class TestTenSecondCache:
             store._last_attempt["greeting"] = time.monotonic() - 10.1
         store.current("greeting")
         assert len(transport.snapshot_requests) == 2
+
+    def test_restart_restores_each_key_from_its_own_disk_document(self, tmp_path):
+        greeting = make_use_case_document(
+            project="demo",
+            environment="production",
+            greeting={"messages": [{"role": "user", "content": "hi"}], "model": "provider/model-a"},
+        )
+        summarize = make_use_case_document(
+            project="demo",
+            environment="production",
+            summarize={"kind": "text", "text": "summarize", "model": "provider/model-b"},
+        )
+        shared_model_id = "shared-model"
+        greeting_model_id = next(iter(greeting["models"]))
+        summarize_model_id = next(iter(summarize["models"]))
+        greeting["models"][shared_model_id] = greeting["models"].pop(greeting_model_id)
+        greeting["models"][shared_model_id]["id"] = shared_model_id
+        greeting["deployments"]["greeting"]["model_id"] = shared_model_id
+        summarize["models"][shared_model_id] = summarize["models"].pop(summarize_model_id)
+        summarize["models"][shared_model_id]["id"] = shared_model_id
+        summarize["deployments"]["summarize"]["model_id"] = shared_model_id
+
+        transport = FakeTransport()
+        transport.push(snapshot_ok(greeting, '"greeting"'))
+        transport.push(snapshot_ok(summarize, '"summarize"'))
+        first = build(tmp_path, transport)
+        first.start()
+        assert first.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
+        assert first.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+
+        down = FakeTransport()
+        down.push(transport_error())
+        down.push(transport_error())
+        restarted = build(tmp_path, down)
+        restarted.start()
+        assert restarted.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
+        assert restarted.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+
+
+    def test_late_parse_cannot_commit_after_the_fetch_deadline(self, tmp_path, monkeypatch):
+        initial = make_use_case_document(
+            project="demo",
+            environment="production",
+            greeting={"messages": [{"role": "user", "content": "old"}], "model": "provider/old"},
+        )
+        update = make_use_case_document(
+            project="demo",
+            environment="production",
+            greeting={"messages": [{"role": "user", "content": "new"}], "model": "provider/new"},
+        )
+        transport = FakeTransport()
+        transport.push(snapshot_ok(update, '"new"'))
+        store = build(tmp_path, transport, timeout=5.0)
+        store.start()
+        initial_raw = json.dumps(initial).encode("utf-8")
+        store.install(UseCaseDocument.from_json(initial_raw), raw=initial_raw)
+        with store._lock:
+            assert store._entry is not None
+            store._entries["greeting"] = store._entry
+            store._last_success["greeting"] = time.monotonic() - 10.1
+            store._last_attempt["greeting"] = time.monotonic() - 10.1
+
+        original = UseCaseDocument.from_json
+
+        def slow_from_json(raw):
+            time.sleep(1.05)
+            return original(raw)
+
+        monkeypatch.setattr("prompton.store.UseCaseDocument.from_json", slow_from_json)
+        entry = store.current("greeting")
+        assert entry.data.models["model-0001"].model_id == "provider/old"
+        assert store.current("greeting").data.models["model-0001"].model_id == "provider/old"
+
     def test_slow_drip_http_body_uses_stale_value_and_cannot_late_install(self, tmp_path):
         initial = make_use_case_document(
             project="demo",

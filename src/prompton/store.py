@@ -62,6 +62,7 @@ class SnapshotEntry:
     fetched_at: float = 0.0
     checked_at: float = 0.0
     stale_since: float | None = None
+    cache_key: str | None = None
 
     @property
     def environment(self) -> str | None:
@@ -211,6 +212,16 @@ class SnapshotStore:
                 and now - self._last_success.get(use_case, 0.0) < CONFIG_FETCH_TTL
             ):
                 return entry
+        if cached is None:
+            loaded = self._load_local_for_key(use_case)
+            if loaded is not None:
+                with self._lock:
+                    self._entries.setdefault(use_case, loaded)
+                    self._entry = loaded
+                    entry = self._entries.get(use_case)
+                    local = self._local_entry_for_key(use_case)
+                    cached = entry or local
+        with self._lock:
             if not self._config.remote_enabled:
                 if cached is not None:
                     return cached
@@ -267,7 +278,9 @@ class SnapshotStore:
         entry = self._entry
         if entry is None:
             return None
-        if use_case in entry.data.use_cases or entry.source != "remote":
+        if entry.cache_key is not None and entry.cache_key != use_case:
+            return None
+        if use_case in entry.data.use_cases or entry.cache_key is None:
             return entry
         return None
 
@@ -324,8 +337,23 @@ class SnapshotStore:
                 return entry
         return None
 
-    def _local_candidates(self) -> list[tuple[Path, Source]]:
+    def _load_local_for_key(self, use_case: str) -> SnapshotEntry | None:
+        for path, source in self._local_candidates(use_case):
+            entry = self._read_file(path, source)
+            if entry is None or use_case not in entry.data.use_cases:
+                continue
+            if self._config.disk_cache_path is not None and path == _key_cache_path(
+                self._config.disk_cache_path, use_case
+            ):
+                entry.cache_key = use_case
+            log.info("prompton: loaded use case %s from %s (%s)", use_case, source, path)
+            return entry
+        return None
+
+    def _local_candidates(self, use_case: str | None = None) -> list[tuple[Path, Source]]:
         candidates: list[tuple[Path, Source]] = []
+        if self._config.disk_cache_path is not None and use_case is not None:
+            candidates.append((_key_cache_path(self._config.disk_cache_path, use_case), "disk"))
         if self._config.disk_cache_path is not None:
             candidates.append((self._config.disk_cache_path, "disk"))
         if self._config.bundle_path is not None:
@@ -440,19 +468,21 @@ class SnapshotStore:
                 )
             return False
 
+        deadline = time.monotonic() + CONFIG_FETCH_TIMEOUT if key is not None else None
         try:
-            response = self._get_snapshot(entry.etag if entry else None, key=key)
+            response = self._get_snapshot(entry.etag if entry else None, key=key, deadline=deadline)
+            self._ensure_deadline(deadline)
+            if response.status == 304:
+                self._ensure_deadline(deadline)
+                self._record_success(refreshed=False, response=response, key=key)
+                return False
+            if response.status == 200:
+                return self._install(response, key=key, deadline=deadline)
         except TransportError as error:
             self._record_failure(error, key=key)
             if raise_errors:
                 raise
             return False
-
-        if response.status == 304:
-            self._record_success(refreshed=False, response=response, key=key)
-            return False
-        if response.status == 200:
-            return self._install(response, key=key)
 
         error = parse_api_error(response)
         if response.status == 429 or response.status >= 500:
@@ -465,7 +495,9 @@ class SnapshotStore:
             raise error
         return False
 
-    def _get_snapshot(self, etag: str | None, *, key: str | None = None) -> HttpResponse:
+    def _get_snapshot(
+        self, etag: str | None, *, key: str | None = None, deadline: float | None = None
+    ) -> HttpResponse:
         query = urlencode({"environment": self._config.environment})
         path = f"/prompts/{quote(key, safe='')}" if key is not None else "/prompts"
         url = f"{self._config.base_url}{path}?{query}"
@@ -475,7 +507,20 @@ class SnapshotStore:
         timeout = min(self._config.timeout, CONFIG_FETCH_TIMEOUT)
         if key is None:
             return self._transport.request("GET", url, headers=headers, timeout=timeout)
-        return self._request_with_deadline("GET", url, headers=headers, timeout=timeout)
+        remaining = self._remaining_deadline(deadline)
+        return self._request_with_deadline("GET", url, headers=headers, timeout=remaining)
+
+    def _remaining_deadline(self, deadline: float | None) -> float:
+        if deadline is None:
+            return min(self._config.timeout, CONFIG_FETCH_TIMEOUT)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TransportError("config fetch timed out")
+        return min(self._config.timeout, remaining)
+
+    def _ensure_deadline(self, deadline: float | None) -> None:
+        if deadline is not None and time.monotonic() > deadline:
+            raise TransportError("config fetch timed out")
 
     def _request_with_deadline(
         self, method: str, url: str, *, headers: Mapping[str, str], timeout: float
@@ -503,7 +548,9 @@ class SnapshotStore:
             raise TransportError("config fetch did not return a response")
         return value
 
-    def _install(self, response: HttpResponse, *, key: str | None = None) -> bool:
+    def _install(
+        self, response: HttpResponse, *, key: str | None = None, deadline: float | None = None
+    ) -> bool:
         try:
             data = UseCaseDocument.from_json(response.body)
         except PromptOnError as error:
@@ -522,6 +569,7 @@ class SnapshotStore:
             )
             return False
 
+        self._ensure_deadline(deadline)
         now = time.time()
         entry = SnapshotEntry(
             data=data,
@@ -531,6 +579,7 @@ class SnapshotStore:
             last_modified=response.last_modified,
             fetched_at=now,
             checked_at=time.monotonic(),
+            cache_key=key,
         )
         with self._lock:
             if key is None:
@@ -543,7 +592,7 @@ class SnapshotStore:
             self._not_before = 0.0
             self._scope_error = None
             self.last_error = None
-        self._write_disk(entry)
+        self._write_disk(entry, key=key)
         log.info(
             "prompton: snapshot updated (environment=%s etag=%s)", data.environment, entry.etag
         )
@@ -638,10 +687,12 @@ class SnapshotStore:
 
     # -- disk --------------------------------------------------------------
 
-    def _write_disk(self, entry: SnapshotEntry) -> None:
+    def _write_disk(self, entry: SnapshotEntry, *, key: str | None = None) -> None:
         path = self._config.disk_cache_path
         if path is None:
             return
+        if key is not None:
+            path = _key_cache_path(path, key)
         meta = {
             "etag": entry.etag,
             "last_modified": entry.last_modified,
@@ -723,6 +774,10 @@ def _as_epoch(value: Any, path: Path) -> float:
 
 def _sidecar_path(path: Path) -> Path:
     return path.with_name(path.name + ".meta.json")
+
+
+def _key_cache_path(path: Path, use_case: str) -> Path:
+    return path.with_name(f"{path.name}.prompts") / f"{quote(use_case, safe='')}.json"
 
 
 def _read_sidecar(path: Path) -> dict[str, Any]:
