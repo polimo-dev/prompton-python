@@ -148,7 +148,7 @@ def test_a_real_round_trip_resolves_renders_and_logs(stub, tmp_path):
 
 
 def test_a_repoll_sends_if_none_match_and_gets_a_304(stub, tmp_path):
-    client = client_for(stub.host, tmp_path, cache_ttl=0.0)
+    client = client_for(stub.host, tmp_path, cache_ttl=0.1)
     try:
         client.use_case("greeting")
         assert client.refresh() is False  # 304
@@ -159,19 +159,19 @@ def test_a_repoll_sends_if_none_match_and_gets_a_304(stub, tmp_path):
 
 
 def test_a_429_pauses_and_the_caller_never_sees_an_error(stub, tmp_path):
-    client = client_for(stub.host, tmp_path, cache_ttl=0.0)
+    client = client_for(stub.host, tmp_path, cache_ttl=0.1)
     try:
         client.use_case("greeting")
         stub.snapshot_status = 429
         stub.retry_after = "45"
-        client._store.refresh(raise_errors=False)
-        assert client.use_cases_info()["retry_after_seconds"] > 40
+        client._store.refresh(raise_errors=False, key="greeting")
+        assert client.use_cases_info()["retry_after_seconds"] <= 1
 
         before = len([call for call in stub.calls if call["method"] == "GET"])
         for _ in range(3):
             assert client.use_case("greeting").model == "openai/gpt-4o-mini"
         after = len([call for call in stub.calls if call["method"] == "GET"])
-        assert after == before, "no request may be made before Retry-After has elapsed"
+        assert after == before, "no request may be made inside the config fetch gate"
     finally:
         client.close(timeout=1)
 

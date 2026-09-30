@@ -98,7 +98,7 @@ class Config:
     project: str | None = None
     timeout: float = 5.0
     cache_ttl: float = 10.0
-    poll: bool = True
+    poll: bool = False
     disk_cache_path: Path | None = None
     bundle_path: Path | None = None
     mode: Mode = "live"
@@ -188,7 +188,7 @@ class Config:
             project=str(project_value),
             timeout=float(_pick(timeout, _env_float("PTN_TIMEOUT"), 5.0)),
             cache_ttl=float(_pick(cache_ttl, _env_float("PTN_CACHE_TTL"), 10.0)),
-            poll=bool(_pick(poll, _env_bool("PTN_POLL"), True)),
+            poll=bool(_pick(poll, _env_bool("PTN_POLL"), False)),
             disk_cache_path=disk_path,
             bundle_path=bundle_path,
             mode=mode_value,  # type: ignore[arg-type]

@@ -231,7 +231,7 @@ class PromptOn:
         return UseCase(self, self._resolve(key=key, prompt=prompt))
 
     def _resolve(self, *, key: str, prompt: str | None = None) -> Resolution:
-        entry = self._store.current()
+        entry = self._store.current(key)
         return _resolve(
             entry.data,
             key,
@@ -242,7 +242,7 @@ class PromptOn:
 
     def prompt_names(self, use_case: str) -> list[str]:
         """The prompt names the live deployment pins - exactly what ``use_case`` accepts."""
-        return _prompt_names(self._store.current().data, use_case)
+        return _prompt_names(self._store.current(use_case).data, use_case)
 
     def filled_prompt(
         self,
@@ -270,13 +270,13 @@ class PromptOn:
 
     # -- use-case document -------------------------------------------------
 
-    def refresh(self, *, force: bool = False) -> bool:
-        """Fetch the use-case document once, now, and wait. ``True`` when it changed.
+    def refresh(self, *, force: bool = False, key: str | None = None) -> bool:
+        """Fetch config once, now. ``key=`` refreshes one use case under the 10s gate.
 
-        An active ``Retry-After`` pause is honoured here too, so calling this from a readiness
-        probe cannot keep a rate-limited server busy; ``force=True`` overrides it.
+        Normal runtime config fetch is demand-driven per key. Passing ``force=True`` is the
+        explicit escape hatch for tools that need to bypass the keyed attempt gate.
         """
-        return self._store.refresh(raise_errors=True, force=force)
+        return self._store.refresh(raise_errors=True, force=force, key=key)
 
     def use_cases(self) -> UseCaseDocument:
         """The decoded document currently in use."""

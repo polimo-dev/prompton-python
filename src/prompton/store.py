@@ -5,18 +5,14 @@ several processes on one host. A bundle - a snapshot JSON committed inside the a
 last resort. Load order on start is **memory, disk, bundle, remote**, and the tier that answered
 is reported as ``source``.
 
-The caching rules this file implements, in one place because they are the whole resilience story:
+The runtime config rules this file implements are demand-driven:
 
-* a **10-second cache**: within the TTL every resolve is served from memory with no HTTP call;
-* past the TTL the document is refreshed with ``If-None-Match`` - in a poll thread, or as a
-  stale-while-revalidate refresh triggered by the next call. **A refresh never blocks or fails a
-  generation**: while it is in flight, and if it fails, the previous document is used;
-* on ``429`` the SDK reads ``Retry-After`` and does not contact the server again before it has
-  elapsed; on ``5xx``, timeouts and transport errors it backs off ×2 from the TTL to five minutes.
-  The caller never sees any of it;
-* a document for another environment or project is never used. The file records both, and a
-  mismatch is ignored rather than raised;
-* resolution fails only when no tier has a document at all.
+* startup and idle periods load only local files and do not fetch remote config;
+* each use-case key keeps its own cached document, freshness timestamp, ETag and in-flight fetch;
+* a remote config attempt is allowed at most once per key per cache TTL, including failures;
+* each config attempt has a one-second total budget and no SDK retry;
+* failed attempts serve the last valid key-specific document, even when it is expired;
+* a document for another environment or project is never used.
 """
 
 from __future__ import annotations
@@ -26,10 +22,12 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 from . import _fork
 from .config import Config
@@ -39,7 +37,6 @@ from .http import (
     Transport,
     build_headers,
     parse_api_error,
-    retry_after_seconds,
     urlencode,
 )
 from .snapshot_data import UseCaseDocument
@@ -47,6 +44,8 @@ from .snapshot_data import UseCaseDocument
 __all__ = ["SnapshotEntry", "SnapshotStore"]
 
 log = logging.getLogger("prompton")
+CONFIG_FETCH_TIMEOUT = 1.0
+CONFIG_FETCH_TTL = 10.0
 
 Source = Literal["remote", "disk", "bundle", "manual"]
 
@@ -89,11 +88,16 @@ class SnapshotStore:
         self._warned_no_key = False
         self._scope_error: str | None = None
         self.last_error: BaseException | None = None
+        self._entries: dict[str, SnapshotEntry] = {}
+        self._last_attempt: dict[str, float] = {}
+        self._last_success: dict[str, float] = {}
+        self._last_error_by_key: dict[str, BaseException] = {}
+        self._inflight: dict[str, tuple[threading.Condition, float]] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
-        """Load the local tiers, then start polling when polling is enabled."""
+        """Load the local tiers. Remote config fetches are demand-driven."""
         if self._config.mode == "test":
             # test mode is deterministic: only load_use_cases() puts a document here
             return
@@ -101,7 +105,7 @@ class SnapshotStore:
         if not self._config.remote_enabled:
             self._warn_no_remote()
             return
-        self._start_poll_thread()
+        return
 
     def _start_poll_thread(self) -> None:
         if not self._config.poll or not self._config.remote_enabled:
@@ -149,19 +153,19 @@ class SnapshotStore:
 
     # -- reading -----------------------------------------------------------
 
-    def current(self) -> SnapshotEntry:
+    def current(self, use_case: str | None = None) -> SnapshotEntry:
         """The document to resolve against, refreshing in the background when it is stale.
 
         Raises :class:`~prompton.errors.UseCaseDocumentUnavailableError` only when no tier has
         anything.
         """
+        if use_case is not None:
+            return self._current_for_key(use_case)
+
         with self._lock:
             entry = self._entry
-            due = entry is None or (time.monotonic() - entry.checked_at) >= self._config.cache_ttl
 
         if entry is not None:
-            if due:
-                self._revalidate_in_background()
             return entry
 
         # Nothing cached at all: this one call waits for the first fetch.
@@ -195,6 +199,77 @@ class SnapshotStore:
             f"({self._config.bundle_path or 'none'}) for environment "
             f"{self._config.environment!r}"
         )
+
+    def _current_for_key(self, use_case: str) -> SnapshotEntry:
+        now = time.monotonic()
+        with self._lock:
+            entry = self._entries.get(use_case)
+            local = self._local_entry_for_key(use_case)
+            cached = entry or local
+            if (
+                entry is not None
+                and now - self._last_success.get(use_case, 0.0) < CONFIG_FETCH_TTL
+            ):
+                return entry
+            if not self._config.remote_enabled:
+                if cached is not None:
+                    return cached
+                return self.current(None)
+            inflight = self._inflight.get(use_case)
+            if inflight is not None:
+                condition, deadline = inflight
+                while use_case in self._inflight:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    condition.wait(timeout=remaining)
+                entry = self._entries.get(use_case)
+                local = self._local_entry_for_key(use_case)
+                cached = entry or local
+                if cached is not None:
+                    return cached
+                if use_case in self._inflight:
+                    raise UseCaseDocumentUnavailableError(
+                        f"PromptOn is unreachable and nothing is cached for {use_case!r}: "
+                        "request timed out"
+                    )
+            last_attempt = self._last_attempt.get(use_case, 0.0)
+            if last_attempt and now - last_attempt < CONFIG_FETCH_TTL:
+                if cached is not None:
+                    return cached
+                error = self._last_error_by_key.get(use_case)
+                raise UseCaseDocumentUnavailableError(
+                    f"PromptOn is unreachable and nothing is cached for {use_case!r}: {error}"
+                )
+            condition = threading.Condition(self._lock)
+            self._inflight[use_case] = (condition, now + CONFIG_FETCH_TIMEOUT)
+            self._last_attempt[use_case] = now
+        try:
+            self.refresh(raise_errors=False, force=True, key=use_case)
+        finally:
+            with self._lock:
+                inflight = self._inflight.pop(use_case, None)
+                if inflight is not None:
+                    condition, _deadline = inflight
+                    condition.notify_all()
+        with self._lock:
+            entry = self._entries.get(use_case)
+            local = self._local_entry_for_key(use_case)
+            cached = entry or local
+            error = self._last_error_by_key.get(use_case)
+        if cached is not None:
+            return cached
+        raise UseCaseDocumentUnavailableError(
+            f"PromptOn is unreachable and nothing is cached for {use_case!r}: {error}"
+        )
+
+    def _local_entry_for_key(self, use_case: str) -> SnapshotEntry | None:
+        entry = self._entry
+        if entry is None:
+            return None
+        if use_case in entry.data.use_cases or entry.source != "remote":
+            return entry
+        return None
 
     def peek(self) -> SnapshotEntry | None:
         """The current entry without triggering any refresh."""
@@ -321,14 +396,14 @@ class SnapshotStore:
 
     # -- remote ------------------------------------------------------------
 
-    def refresh(self, *, raise_errors: bool = True, force: bool = False) -> bool:
+    def refresh(
+        self, *, raise_errors: bool = True, force: bool = False, key: str | None = None
+    ) -> bool:
         """Fetch once, now, and wait for the answer. ``True`` when a new document was installed.
 
-        This is the synchronous entry point for scripts and for a warm-up at boot. A ``304`` counts
-        as success and returns ``False``.
-
-        A ``Retry-After`` pause applies here too - a readiness probe calling this in a loop must not
-        become the thing that keeps the server rate-limiting. Pass ``force=True`` to go anyway.
+        This is the synchronous entry point for scripts. A keyed refresh follows the runtime
+        10-second attempt gate unless ``force=True`` is passed. A ``304`` counts as success and
+        returns ``False``.
         """
         if self._config.mode == "test":
             return False
@@ -349,7 +424,13 @@ class SnapshotStore:
             entry = self._entry
             pause = self._not_before - time.monotonic()
             last_error = self.last_error
-        if pause > 0 and not force:
+        if key is not None:
+            with self._lock:
+                entry = self._entries.get(key)
+                attempt = self._last_attempt.get(key, 0.0)
+            if attempt and time.monotonic() - attempt < CONFIG_FETCH_TTL and not force:
+                return False
+        elif pause > 0 and not force:
             if raise_errors:
                 if isinstance(last_error, BaseException):
                     raise last_error
@@ -360,49 +441,85 @@ class SnapshotStore:
             return False
 
         try:
-            response = self._get_snapshot(entry.etag if entry else None)
+            response = self._get_snapshot(entry.etag if entry else None, key=key)
         except TransportError as error:
-            self._record_failure(error)
+            self._record_failure(error, key=key)
             if raise_errors:
                 raise
             return False
 
         if response.status == 304:
-            self._record_success(refreshed=False, response=response)
+            self._record_success(refreshed=False, response=response, key=key)
             return False
         if response.status == 200:
-            return self._install(response)
+            return self._install(response, key=key)
 
         error = parse_api_error(response)
         if response.status == 429 or response.status >= 500:
-            self._record_failure(error, retry_after=retry_after_seconds(response))
+            self._record_failure(error, retry_after=None, key=key)
         else:
             # 401/403/404 are configuration mistakes: back off, but say so loudly.
-            self._record_failure(error)
+            self._record_failure(error, key=key)
             log.error("prompton: snapshot fetch failed: %s", error)
         if raise_errors:
             raise error
         return False
 
-    def _get_snapshot(self, etag: str | None) -> HttpResponse:
+    def _get_snapshot(self, etag: str | None, *, key: str | None = None) -> HttpResponse:
         query = urlencode({"environment": self._config.environment})
-        url = f"{self._config.base_url}/prompts?{query}"
+        path = f"/prompts/{quote(key, safe='')}" if key is not None else "/prompts"
+        url = f"{self._config.base_url}{path}?{query}"
         headers = build_headers(self._config.api_key, self._config.user_agent)
         if etag:
             headers["if-none-match"] = etag
-        return self._transport.request("GET", url, headers=headers, timeout=self._config.timeout)
+        timeout = min(self._config.timeout, CONFIG_FETCH_TIMEOUT)
+        if key is None:
+            return self._transport.request("GET", url, headers=headers, timeout=timeout)
+        return self._request_with_deadline("GET", url, headers=headers, timeout=timeout)
 
-    def _install(self, response: HttpResponse) -> bool:
+    def _request_with_deadline(
+        self, method: str, url: str, *, headers: Mapping[str, str], timeout: float
+    ) -> HttpResponse:
+        result: dict[str, HttpResponse | BaseException] = {}
+
+        def run() -> None:
+            try:
+                result["value"] = self._transport.request(
+                    method, url, headers=headers, timeout=timeout
+                )
+            except BaseException as error:  # noqa: BLE001 - transported to caller below
+                result["error"] = error
+
+        thread = threading.Thread(target=run, name="prompton-config-fetch", daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            raise TransportError("config fetch timed out")
+        error = result.get("error")
+        if isinstance(error, BaseException):
+            raise error
+        value = result.get("value")
+        if not isinstance(value, HttpResponse):
+            raise TransportError("config fetch did not return a response")
+        return value
+
+    def _install(self, response: HttpResponse, *, key: str | None = None) -> bool:
         try:
             data = UseCaseDocument.from_json(response.body)
         except PromptOnError as error:
-            self._record_failure(error)
+            self._record_failure(error, key=key)
             log.error("prompton: the server returned a snapshot this SDK cannot read: %s", error)
             return False
         if not self._matches_scope(data, Path("<response>"), "remote"):
             with self._lock:
                 reason = self._scope_error or "snapshot scope mismatch"
-            self._record_failure(PromptOnError(reason))
+            self._record_failure(PromptOnError(reason), key=key)
+            return False
+        if key is not None and key not in data.use_cases:
+            self._record_failure(
+                PromptOnError(f"snapshot did not contain requested prompt {key!r}"),
+                key=key,
+            )
             return False
 
         now = time.time()
@@ -416,7 +533,12 @@ class SnapshotStore:
             checked_at=time.monotonic(),
         )
         with self._lock:
-            self._entry = entry
+            if key is None:
+                self._entry = entry
+            else:
+                self._entries[key] = entry
+                self._entry = entry
+                self._last_success[key] = time.monotonic()
             self._failures = 0
             self._not_before = 0.0
             self._scope_error = None
@@ -427,20 +549,36 @@ class SnapshotStore:
         )
         return True
 
-    def _record_success(self, *, refreshed: bool, response: HttpResponse) -> None:
+    def _record_success(
+        self, *, refreshed: bool, response: HttpResponse, key: str | None = None
+    ) -> None:
         with self._lock:
             self._failures = 0
             self._not_before = 0.0
             self.last_error = None
-            if self._entry is not None:
-                self._entry.checked_at = time.monotonic()
-                self._entry.stale_since = None
-                self._entry.source = "remote"
+            entry = self._entries.get(key) if key is not None else self._entry
+            if entry is not None:
+                entry.checked_at = time.monotonic()
+                entry.stale_since = None
+                entry.source = "remote"
                 if response.etag:
-                    self._entry.etag = response.etag
+                    entry.etag = response.etag
+                if key is not None:
+                    self._last_success[key] = time.monotonic()
 
-    def _record_failure(self, error: BaseException, retry_after: float | None = None) -> None:
+    def _record_failure(
+        self,
+        error: BaseException,
+        retry_after: float | None = None,
+        key: str | None = None,
+    ) -> None:
         with self._lock:
+            if key is not None:
+                self._last_error_by_key[key] = error
+                entry = self._entries.get(key)
+                if entry is not None and entry.stale_since is None:
+                    entry.stale_since = time.monotonic()
+                return
             self._failures += 1
             self.last_error = error
             delay = retry_after

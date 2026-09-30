@@ -236,7 +236,7 @@ def test_log_record_shape_matches_the_golden_chat_success() -> None:
         ),
     )
     # The SDK name is this package's, not the reference implementation's.
-    assert record.pop("sdk") == {"name": "prompton-python", "version": "0.4.1"}
+    assert record.pop("sdk") == {"name": "prompton-python", "version": "0.5.0"}
     expected = {key: value for key, value in golden.items() if key != "sdk"}
     assert record == expected
 

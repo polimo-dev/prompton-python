@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from prompton.config import Config
 from prompton.errors import APIError, UseCaseDocumentUnavailableError
-from prompton.http import HttpResponse
+from prompton.http import HttpResponse, UrllibTransport
+from prompton.snapshot_data import UseCaseDocument
 from prompton.store import SnapshotStore
 from prompton.testing import make_use_case_document
 
@@ -59,7 +62,7 @@ class TestTenSecondCache:
             assert store.current().data.project == "demo"
         assert len(transport.snapshot_requests) == 1
 
-    def test_past_the_ttl_the_next_call_revalidates_in_the_background(self, tmp_path, document):
+    def test_past_the_ttl_idle_current_does_not_revalidate(self, tmp_path, document):
         transport = FakeTransport()
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport, cache_ttl=0.01)
@@ -68,13 +71,126 @@ class TestTenSecondCache:
 
         transport.push(HttpResponse(status=304, headers={"etag": ETAG}))
         time.sleep(0.02)
-        store.current()  # triggers the background refresh, returns immediately
-        deadline = time.monotonic() + 2
-        while len(transport.snapshot_requests) < 2 and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert len(transport.snapshot_requests) == 2
-        assert transport.snapshot_requests[1]["headers"]["if-none-match"] == ETAG
+        store.current()
+        assert len(transport.snapshot_requests) == 1
 
+
+
+
+    def test_keyed_config_gate_is_fixed_at_ten_seconds(self, tmp_path, document):
+        transport = FakeTransport()
+        transport.push(snapshot_ok(document, '"first"'))
+        transport.push(snapshot_ok(document, '"second"'))
+        store = build(tmp_path, transport, cache_ttl=0.01)
+        store.start()
+
+        store.current("greeting")
+        with store._lock:
+            store._last_success["greeting"] = time.monotonic() - 9.0
+            store._last_attempt["greeting"] = time.monotonic() - 9.0
+        store.current("greeting")
+        assert len(transport.snapshot_requests) == 1
+
+        with store._lock:
+            store._last_success["greeting"] = time.monotonic() - 10.1
+            store._last_attempt["greeting"] = time.monotonic() - 10.1
+        store.current("greeting")
+        assert len(transport.snapshot_requests) == 2
+    def test_slow_drip_http_body_uses_stale_value_and_cannot_late_install(self, tmp_path):
+        initial = make_use_case_document(
+            project="demo",
+            environment="production",
+            greeting={"messages": [{"role": "user", "content": "old"}], "model": "provider/old"},
+        )
+        slow = make_use_case_document(
+            project="demo",
+            environment="production",
+            greeting={"messages": [{"role": "user", "content": "new"}], "model": "provider/new"},
+        )
+        body = json.dumps(slow).encode("utf-8")
+
+        class DripHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("etag", '"slow"')
+                self.end_headers()
+                self.wfile.write(body[:1])
+                self.wfile.flush()
+                time.sleep(1.25)
+                try:
+                    self.wfile.write(body[1:])
+                    self.wfile.flush()
+                except BrokenPipeError:
+                    pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), DripHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            store = build(
+                tmp_path,
+                UrllibTransport(),
+                host=f"http://127.0.0.1:{server.server_port}",
+                cache_ttl=0.01,
+                timeout=5.0,
+            )
+            store.start()
+            initial_raw = json.dumps(initial).encode("utf-8")
+            store.install(UseCaseDocument.from_json(initial_raw), raw=initial_raw)
+            with store._lock:
+                assert store._entry is not None
+                store._entries["greeting"] = store._entry
+                store._last_success["greeting"] = time.monotonic() - 1.0
+
+            started = time.monotonic()
+            entry = store.current("greeting")
+            elapsed = time.monotonic() - started
+            assert elapsed < 1.15
+            assert entry.data.models["model-0001"].model_id == "provider/old"
+
+            time.sleep(0.4)
+            assert store.current("greeting").data.models["model-0001"].model_id == "provider/old"
+        finally:
+            server.shutdown()
+            server.server_close()
+    def test_each_key_keeps_its_own_document_when_shared_model_ids_change(self, tmp_path):
+        greeting = make_use_case_document(
+            project="demo",
+            environment="production",
+            greeting={"messages": [{"role": "user", "content": "hi"}], "model": "provider/model-a"},
+        )
+        summarize = make_use_case_document(
+            project="demo",
+            environment="production",
+            summarize={"kind": "text", "text": "summarize", "model": "provider/model-b"},
+        )
+        shared_model_id = "shared-model"
+        greeting_model_id = next(iter(greeting["models"]))
+        summarize_model_id = next(iter(summarize["models"]))
+        greeting["models"][shared_model_id] = greeting["models"].pop(greeting_model_id)
+        greeting["models"][shared_model_id]["id"] = shared_model_id
+        greeting["deployments"]["greeting"]["model_id"] = shared_model_id
+        summarize["models"][shared_model_id] = summarize["models"].pop(summarize_model_id)
+        summarize["models"][shared_model_id]["id"] = shared_model_id
+        summarize["deployments"]["summarize"]["model_id"] = shared_model_id
+
+        transport = FakeTransport()
+        transport.push(snapshot_ok(greeting, '"greeting"'))
+        transport.push(snapshot_ok(summarize, '"summarize"'))
+        store = build(tmp_path, transport)
+        store.start()
+
+        assert store.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
+        assert store.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+        assert store.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
+        assert [request["url"].split("/api/v1", 1)[1].split("?", 1)[0] for request in transport.snapshot_requests] == [
+            "/prompts/greeting",
+            "/prompts/summarize",
+        ]
     def test_a_304_costs_nothing_and_keeps_the_document(self, tmp_path, document):
         transport = FakeTransport()
         transport.push(snapshot_ok(document))
@@ -103,7 +219,7 @@ class TestRateLimiting:
             )
         )
         store.refresh(raise_errors=False)
-        assert store.info()["retry_after_seconds"] > 25
+        assert store.info()["retry_after_seconds"] <= 1
 
         # the caller never sees an error, and no further request is made
         before = len(transport.snapshot_requests)
@@ -132,7 +248,7 @@ class TestRateLimiting:
             )
         )
         store.refresh(raise_errors=False)
-        assert 40 < store.info()["retry_after_seconds"] <= 42
+        assert 9 < store.info()["retry_after_seconds"] <= 10
 
     def test_a_manual_refresh_does_not_break_the_pause_either(self, tmp_path, document):
         """A readiness probe calling refresh() in a loop must not keep the server rate-limiting."""
@@ -373,8 +489,7 @@ class TestDiskWrites:
 
 
 class TestBackgroundRefresh:
-    def test_when_the_poll_thread_is_gone_the_next_call_revalidates(self, tmp_path, document):
-        """This is what a forked worker looks like: poll=True, but no poll thread alive."""
+    def test_poll_option_does_not_start_config_polling(self, tmp_path, document):
         transport = FakeTransport(lambda call: snapshot_ok(document))
         store = build(tmp_path, transport, poll=True, cache_ttl=0.01)
         store.start()
@@ -384,11 +499,8 @@ class TestBackgroundRefresh:
 
         before = len(transport.snapshot_requests)
         time.sleep(0.02)
-        store.current()  # returns the cached document immediately, refreshes behind it
-        deadline = time.monotonic() + 2
-        while len(transport.snapshot_requests) == before and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert len(transport.snapshot_requests) > before
+        store.current()
+        assert len(transport.snapshot_requests) == before
 
 
 class TestModes:

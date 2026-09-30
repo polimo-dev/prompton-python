@@ -74,9 +74,9 @@ Precedence is always **explicit option > environment variable > default**.
 | `host` | `PTN_HOST` | `https://app.prompton.ai` | The SDK appends `/api/v1` itself |
 | `environment` | `PTN_ENVIRONMENT` | `production` | Sent as `?environment=` and used as the disk/bundle guard |
 | `project` | `PTN_PROJECT` | parsed from the key | Names the disk cache file and guards against a foreign use-case document |
-| `timeout` | `PTN_TIMEOUT` | `5.0` | Per-request timeout, seconds |
-| `cache_ttl` | `PTN_CACHE_TTL` | `10.0` | How long a use-case document is served from memory with no HTTP call |
-| `poll` | `PTN_POLL` | `true` | Refresh in a background thread. `false` refreshes on the next call instead (stale-while-revalidate) |
+| `timeout` | `PTN_TIMEOUT` | `5.0` | Per-request timeout for non-config API calls. Config fetches are capped at 1 second |
+| `cache_ttl` | `PTN_CACHE_TTL` | `10.0` | Deprecated compatibility option. Normal config fetch freshness and attempt gating are fixed at 10 seconds per use-case key |
+| `poll` | `PTN_POLL` | `false` | Deprecated compatibility option. Normal runtime config fetches do not poll in the background |
 | `disk_cache` | `PTN_DISK_CACHE` | on | `True`, `False`, or a path. Default is `<os cache dir>/prompton/<project>-<environment>.json` |
 | `bundle` | `PTN_BUNDLE` | — | A use-case JSON shipped inside the app, used when memory and disk are empty |
 | `mode` | `PTN_MODE` | `live` | `test` (no HTTP, no disk cache or bundle, logs captured) or `offline` (disk and bundle only) |
@@ -103,53 +103,43 @@ client = PromptOn(
 
 ## Resilience: what happens when PromptOn is down
 
-The use-case document lives in three tiers - **memory, one local file, a bundled file** - and nothing else.
-The SDK never requires or optionally integrates a database, Redis, or any other shared store.
-Instances never coordinate; each keeps its own copy, which ETag polling makes cheap. Several
-processes on one host may share the disk file: writes are atomic (tmp + rename), readers tolerate a
-concurrent rename, and a corrupt or partial file is ignored rather than raised.
+The use-case document lives in three local tiers - **memory, one local file, a bundled file** - and
+nothing else. The SDK never requires or optionally integrates a database, Redis, or any other shared
+store. Several processes on one host may share the disk file: writes are atomic (tmp + rename),
+readers tolerate a concurrent rename, and a corrupt or partial file is ignored rather than raised.
 
-* Within `cache_ttl` (10 seconds) every `use_case` is answered from memory with **no HTTP call**.
-* Past the TTL the SDK refreshes with `If-None-Match`; a `304` costs nothing. The refresh happens in
-  the background - a poll thread, or a stale-while-revalidate refresh triggered by the next call.
-  **A refresh never blocks or fails a generation**: while it is in flight, and if it fails, the
-  previous document is used.
-* On `429` the SDK reads `Retry-After` (falling back to `error.details.retry_after`, then to
-  backoff) and does not contact the server again before it has elapsed. On `5xx`, timeouts and
-  transport errors it backs off ×2 from the TTL up to five minutes. The caller sees none of it.
-* On start the load order is **memory → disk → bundle → remote**, and the tier that answered is
-  reported as `source` on the `UseCase` and on every monitoring log.
+Runtime config fetch is demand-driven per use-case key:
+
+* Startup and idle periods load only local files. They do not fetch remote config and do not poll.
+* `client.use_case("support_reply")` checks that key's cache. If it is fresh within the fixed 10-second config freshness window, no HTTP call is made.
+* If the key is missing or stale, the SDK tries one
+  `GET /api/v1/prompts/support_reply?environment=...` request with that key's ETag when available.
+  Concurrent calls for the same key share the same in-flight request; different keys are independent.
+* The same fixed 10-second window is also the attempt gate. A failed attempt counts, so the SDK will not retry
+  that key again until the TTL has elapsed. There is no config retry loop.
+* Each config fetch has a one-second total deadline, including the response body. If PromptOn cannot
+  answer in that budget, the SDK immediately serves the last valid value for that key, even if it is
+  expired. With no cached value for that key, it raises `UseCaseDocumentUnavailableError`.
 * A document for **another environment or project is never used**. The file records both; a mismatch
-  is ignored with a warning, and if it leaves the client with nothing the error says so - the
-  server answered, it just answered for someone else's project.
-* **Prefork servers work.** Threads do not survive `fork()`, so a client built before gunicorn
-  `--preload` or uWSGI forks would otherwise never refresh again. The SDK restarts its poll thread
-  and its log sender in the child, and falls back to stale-while-revalidate if it cannot.
+  is ignored with a warning, and if it leaves the client with nothing the error names both sides
+  rather than blaming the network.
+* Prefork servers keep log sending safe after `fork()`. Config polling is disabled, so there is no
+  config poll thread to restart in children.
 
 ### How it fails
 
 | Situation | What your call sees |
 |---|---|
-| Use-case document is fresh | Served from memory, no HTTP call |
-| Use-case document is stale, refresh in flight | The previous document, immediately |
-| PromptOn returns 429 / 5xx, or is unreachable | The previous document; the SDK backs off quietly |
-| PromptOn unreachable, disk cache present | The disk document, `source="disk"` |
-| PromptOn unreachable, only a bundle present | The bundled document, `source="bundle"` |
-| PromptOn unreachable and **nothing cached** | `UseCaseDocumentUnavailableError` saying exactly that |
+| Use-case cache is fresh | Served from memory, no HTTP call |
+| Use-case cache is stale or missing | The resolved use case after one keyed fetch, or the cached fallback if the fetch fails |
+| Same use case requested concurrently | The callers share one in-flight config fetch |
+| PromptOn returns `304 Not Modified` | The previous document for that key |
+| PromptOn returns `429` / `5xx`, times out, or is unreachable | The previous document for that key, and no retry for that key until 10 seconds elapse |
+| PromptOn unreachable, disk cache present for that key | The disk document, `source="disk"` |
+| PromptOn unreachable, only a bundle present for that key | The bundled document, `source="bundle"` |
+| PromptOn unreachable and **nothing cached for that key** | `UseCaseDocumentUnavailableError` saying exactly that |
 | A use-case document arrives for another project or environment | It is ignored; if nothing else is cached, the error names both sides rather than blaming the network |
 | `filled_prompt()` in `mode="test"`, `mode="offline"`, or with no key | No request is made: `ConfigurationError` in test mode, otherwise the cached answer, or `UseCaseDocumentUnavailableError` |
-| Use case key not in the use-case document | `UnknownUseCaseError` - a bug in the app |
-| Use case has no live deployment | `UnresolvedError` - deploy it; never a silent fallback |
-| Prompt name not pinned by the live revision | `UnknownPromptError` with `prompt_names`; never falls back to `default` |
-| A template variable was not supplied | `MissingVariableError` naming the variable |
-| Monitoring log queue full | The oldest records are dropped and counted in `client.stats` |
-| No API key, or `mode="offline"` | Nothing is sent; records are dropped and counted as `dropped_no_remote`, with one log line |
-| `/logs` returns 429 or 5xx | The same batch, with the same ids, is retried; duplicates are absorbed server-side |
-| `/logs` returns 413 | The batch is split in half and resent |
-| `/logs` returns another 4xx | The batch is dropped, counted, and logged once - a rejected record only gets rejected again |
-
-Nothing in the monitoring-log path can raise into your request. The one exception is `log()` with a
-required field missing, which is a bug in the calling code and raises `ValueError` straight away.
 
 ## The monitoring log record
 
@@ -208,7 +198,7 @@ def call():
 ```python
 client.prompt_names("support_reply")  # ["default", "ko"] - exactly what use_case() accepts
 client.filled_prompt("support_reply", variables={...})  # prompt endpoint smoke test
-client.refresh()  # fetch once, now, synchronously (refresh(force=True) ignores a Retry-After pause)
+client.refresh(key="support_reply")  # fetch one key now, subject to the 10 s attempt gate
 client.export_use_cases("app/prompton/use-cases.production.json")  # build a bundle
 client.use_cases_info()  # {"source", "etag", "age_seconds", "stale", ...}
 client.log(record)  # a record you built yourself
@@ -221,8 +211,8 @@ the request in flight - so the counters it returns describe what actually happen
 spends whatever the flush leaves on finishing that last batch. `stats.queued` counts all three, and
 `stats.batches_sent` counts only batches the server accepted.
 
-`refresh()` respects an active `Retry-After`: calling it in a readiness-probe loop cannot become the
-thing that keeps a rate-limited server busy. Pass `force=True` when you really mean now.
+Keyed `refresh(key=...)` follows the same one-attempt-per-10-seconds gate as `use_case()`.
+`refresh(force=True, key=...)` is the explicit escape hatch for tools that really mean now.
 
 From the command line, for CI:
 

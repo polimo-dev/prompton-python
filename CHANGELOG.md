@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Changed normal config fetch to be demand-driven per use-case/prompt key. Startup and idle
+  periods no longer fetch or poll PromptOn.
+- `use_case(key)` fetches `GET /api/v1/prompts/:key?environment=...` only when that key has no
+  fresh cache, shares same-key concurrent fetches, and keeps prompt keys cached independently.
+- Config fetches have a 10-second freshness/attempt gate, a 1-second total fetch deadline, no
+  retry, per-key ETags, and stale fallback to the last valid disk, bundle, manual, or remote value.
+
 ## 0.4.1
 
 - Fixed runtime compatibility with the current PromptOn prompt API: snapshot fetches now use `GET /api/v1/prompts`, remote render uses `POST /api/v1/prompts/{key}/render` with `template`, and monitoring logs use canonical `prompt_key`/`template` fields.

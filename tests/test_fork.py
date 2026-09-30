@@ -69,7 +69,7 @@ def run_in_child(work) -> bool:
     return answer == b"1" and os.waitstatus_to_exitcode(status) == 0
 
 
-def test_a_forked_child_keeps_refreshing_its_snapshot(tmp_path):
+def test_a_forked_child_does_not_resume_config_polling(tmp_path):
     transport = CountingTransport()
     config = Config.build(
         api_key="ptn_demo_key",
@@ -85,14 +85,14 @@ def test_a_forked_child_keeps_refreshing_its_snapshot(tmp_path):
 
     def work() -> bool:
         before = transport.count
-        deadline = time.monotonic() + 3
-        while transport.count <= before and time.monotonic() < deadline:
+        deadline = time.monotonic() + 0.2
+        while time.monotonic() < deadline:
             store.current()
             time.sleep(0.02)
-        return transport.count > before
+        return transport.count == before
 
     try:
-        assert run_in_child(work), "the forked worker never refreshed its snapshot again"
+        assert run_in_child(work), "the forked worker made an idle config fetch"
     finally:
         store.close()
 

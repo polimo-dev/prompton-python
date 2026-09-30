@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prompton-sdk"
-version = "0.4.1"
+version = "0.5.0"
 description = "PromptOn SDK for Python - fetch your pinned prompt, model and params, call the provider yourself, send monitoring logs back."
 readme = "README.md"
 requires-python = ">=3.10"
