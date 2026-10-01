@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Retired message-slot expansion. A prompt message with `{"type": "slot"}` now raises
+  `Message slots are not supported; compose conversation history in app code.` even when variables
+  include a matching list; `{{ history }}` remains an ordinary template variable.
+- Updated examples and tests so apps compose PromptOn-managed messages, app-owned conversation
+  history and the current user message before calling the provider, then pass those final messages
+  to `track(input_messages=...)`.
+
 ## 0.5.0
 
 - Changed normal config fetch to be demand-driven per use-case/prompt key. Startup and idle

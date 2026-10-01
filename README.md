@@ -42,7 +42,12 @@ import prompton
 prompton.configure(api_key="ptn_myproject_...")  # or set PTN_API_KEY
 
 use_case = prompton.use_case("support_reply")  # which prompt, model and params
-messages = use_case.messages({"question": question})
+managed_messages = use_case.messages({"tone": "warm"})
+messages = [
+    *managed_messages,
+    *conversation_history,  # your app's prior user/assistant/tool messages
+    {"role": "user", "content": question},
+]
 
 
 def call():
@@ -52,9 +57,14 @@ def call():
     return prompton.Result.from_openai(answer)
 
 
-result = use_case.track(call, variables={"question": question})
+result = use_case.track(call, variables={"tone": "warm"}, input_messages=messages)
 print(result.content)
 ```
+
+PromptOn-managed messages are the prompt config your team edits in PromptOn, usually system or
+developer instructions. Conversation history and the current user message stay in your app and are
+added immediately before the provider request. Pass that final provider input as `input_messages`
+so monitoring logs show what the model actually received.
 
 `track` times the call, builds the monitoring log (which deployment revision, which
 prompt version, which model, how long, how many tokens, what it cost, why it stopped) and queues it.

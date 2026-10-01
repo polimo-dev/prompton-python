@@ -73,6 +73,7 @@ _BLOCK_TAGS = frozenset(
 )
 
 _BUILTIN_VARIABLES = frozenset({"forloop"})
+_MESSAGE_SLOT_ERROR = "Message slots are not supported; compose conversation history in app code."
 
 _TOKEN_RE = re.compile(r"(\{\{-?.*?-?\}\}|\{%-?.*?-?%\})", re.DOTALL)
 _TAG_NAME_RE = re.compile(r"\{%-?\s*([A-Za-z_][A-Za-z0-9_]*)")
@@ -911,24 +912,12 @@ def render_messages(
     variables: Mapping[str, Any] | None = None,
     engine: Engine = "liquid",
 ) -> list[dict[str, Any]]:
-    """Render static string content and splice native message slots verbatim."""
+    """Render static string content and preserve native provider message fields."""
     vars_map = variables or {}
     rendered: list[dict[str, Any]] = []
     for message in messages:
         if message.get("type") == "slot":
-            name = message.get("name")
-            if not isinstance(name, str):
-                raise RenderError("message slot requires a name")
-            if name not in vars_map:
-                raise MissingVariableError(name)
-            value = vars_map[name]
-            if not isinstance(value, list):
-                raise RenderError(f"message slot {name} must be a list")
-            for entry in value:
-                if not isinstance(entry, Mapping):
-                    raise RenderError(f"message slot {name} must contain objects")
-                rendered.append(dict(entry))
-            continue
+            raise RenderError(_MESSAGE_SLOT_ERROR)
         item = dict(message)
         if isinstance(message.get("content"), str):
             item["content"] = render(message["content"], vars_map, engine)

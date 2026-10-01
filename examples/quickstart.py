@@ -56,10 +56,16 @@ def build_client() -> PromptOn:
                     {
                         "role": "system",
                         "content": "You are a friendly greeter. Answer in one line.",
-                    },
-                    {"role": "user", "content": "Say hello to {{ name }}."},
+                    }
                 ],
-                "prompts": {"ko": [{"role": "user", "content": "{{ name }}님에게 인사해줘."}]},
+                "prompts": {
+                    "ko": [
+                        {
+                            "role": "system",
+                            "content": "너는 친절한 인사 도우미다. 한 줄로 답한다.",
+                        }
+                    ]
+                },
                 "params": {"temperature": 0.2, "max_tokens": 256},
             },
         )
@@ -79,8 +85,14 @@ def main() -> None:
         print("prompts pinned by the live revision:", client.prompt_names(USE_CASE))
 
         variables = {"name": "Ada"}
-        messages = use_case.messages(variables)
-        print("rendered prompt:", json.dumps(messages, ensure_ascii=False, indent=2))
+        managed_messages = use_case.messages(variables)
+        app_history = [{"role": "assistant", "content": "Ready to greet."}]
+        messages = [
+            *managed_messages,
+            *app_history,
+            {"role": "user", "content": f"Say hello to {variables['name']}."},
+        ]
+        print("provider messages:", json.dumps(messages, ensure_ascii=False, indent=2))
 
         def call() -> Result:
             try:

@@ -119,10 +119,27 @@ class TestMessages:
             {"role": "system", "content": "Hi Ada", "name": "bot"}
         ]
 
+    def test_history_is_an_ordinary_variable_name(self):
+        messages = [{"role": "system", "content": "Summarize {{ history }}."}]
+        assert template.render_messages(messages, {"history": "past turns"}) == [
+            {"role": "system", "content": "Summarize past turns."}
+        ]
+
     def test_a_missing_variable_in_any_message_fails_the_whole_render(self):
         messages = [{"role": "system", "content": "ok"}, {"role": "user", "content": "{{ x }}"}]
         with pytest.raises(MissingVariableError):
             template.render_messages(messages, {})
+
+    @pytest.mark.parametrize("engine", ["liquid", "raw"])
+    def test_message_slots_are_rejected_before_variable_lookup(self, engine):
+        messages = [{"type": "slot", "name": "history"}]
+        with pytest.raises(RenderError) as error:
+            template.render_messages(
+                messages, {"history": [{"role": "user", "content": "past"}]}, engine
+            )
+        assert str(error.value) == (
+            "Message slots are not supported; compose conversation history in app code."
+        )
 
 
 class TestLint:

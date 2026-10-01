@@ -55,6 +55,14 @@ class TestResolveAndRender:
 class TestWithGeneration:
     def test_a_successful_call_is_logged_with_the_resolution_evidence(self, client):
         use_case = client.use_case("greeting")
+        variables = {"name": "Ada"}
+        managed_messages = use_case.messages(variables)
+        app_history = [{"role": "assistant", "content": "Previous answer."}]
+        input_messages = [
+            managed_messages[0],
+            *app_history,
+            {"role": "user", "content": "Say hello to Ada."},
+        ]
         result = use_case.track(
             lambda: Result(
                 content="Hello, Ada!",
@@ -66,8 +74,8 @@ class TestWithGeneration:
                 model_used="openai/gpt-4o-mini",
                 upstream_provider="OpenAI",
             ),
-            variables={"name": "Ada"},
-            input_messages=use_case.messages({"name": "Ada"}),
+            variables=variables,
+            input_messages=input_messages,
             trace_id="job:1",
             sequence=1,
             end_user_ref="user-42",
@@ -83,6 +91,7 @@ class TestWithGeneration:
         assert logged["source"] == "manual"
         assert logged["usage"]["cost_source"] == "provider"
         assert logged["input"]["variables"] == {"name": "Ada"}
+        assert logged["input"]["messages"] == input_messages
         assert logged["output"]["content"] == "Hello, Ada!"
         assert logged["context"] == {"plan": "pro"}
         assert logged["sdk"] == {"name": "prompton-python", "version": prompton.VERSION}
