@@ -40,6 +40,14 @@ __all__ = ["PromptOn", "UseCase"]
 
 log = logging.getLogger("prompton")
 
+_CLOSED_TRANSPORT_MESSAGES = {
+    "%Req.TransportError{reason: :closed}",
+    "failed to send request: %Req.TransportError{reason: :closed}",
+}
+_CLOSED_TRANSPORT_COMPLETION_OUTPUTS = _CLOSED_TRANSPORT_MESSAGES | {
+    "failed to call LLM: failed to send request: %Req.TransportError{reason: :closed}",
+}
+
 
 class _TrackLog:
     def __init__(self) -> None:
@@ -316,11 +324,17 @@ class PromptOn:
         The SDK never infers tool execution from model requests. Pass the tool/completion events
         your app observed; each event must already carry its stable ``event_id`` and ``trace_id``.
         """
-        prepared = _prepare_trace_events(events)
+        prepared = [
+            event
+            for event in _prepare_trace_events(events)
+            if not _closed_transport_completion(event)
+        ]
         if self.config.mode == "test":
             with self._captured_lock:
                 self._captured_events.extend(prepared)
             return {"accepted": len(prepared), "duplicates": 0, "rejected": []}
+        if not prepared:
+            return {"accepted": 0, "duplicates": 0, "rejected": []}
         if not self.config.remote_enabled:
             return {"accepted": 0, "duplicates": 0, "rejected": []}
 
@@ -414,6 +428,8 @@ class PromptOn:
         return use_case.payload_policy if use_case else None
 
     def _enqueue(self, item: dict[str, Any], policy: Any) -> None:
+        if _closed_transport_log(item):
+            return
         try:
             prepared = apply_policy(
                 item,
@@ -626,3 +642,22 @@ def _prepare_trace_events(events: list[Mapping[str, Any]]) -> list[dict[str, Any
         item["sdk"] = {"name": SDK_NAME, "version": VERSION, **dict(sdk)}
         prepared.append(item)
     return prepared
+
+
+def _closed_transport_log(item: Mapping[str, Any]) -> bool:
+    error = item.get("error")
+    if not isinstance(error, Mapping):
+        return False
+    return (
+        item.get("status") == "error"
+        and error.get("kind") == "transport"
+        and error.get("message") in _CLOSED_TRANSPORT_MESSAGES
+    )
+
+
+def _closed_transport_completion(event: Mapping[str, Any]) -> bool:
+    return (
+        event.get("event_kind") == "completion"
+        and event.get("status") == "error"
+        and event.get("completion_output") in _CLOSED_TRANSPORT_COMPLETION_OUTPUTS
+    )

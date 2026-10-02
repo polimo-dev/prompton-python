@@ -221,6 +221,13 @@ the request in flight - so the counters it returns describe what actually happen
 spends whatever the flush leaves on finishing that last batch. `stats.queued` counts all three, and
 `stats.batches_sent` counts only batches the server accepted.
 
+Generation logs with `status: "error"`, `error.kind: "transport"` and an exact error message of
+`%Req.TransportError{reason: :closed}` or
+`failed to send request: %Req.TransportError{reason: :closed}` are omitted before payload policy,
+redaction, test capture, or buffering. These are closed connection failures normally handled by the
+app's provider retry layer. `track()` still returns or re-raises the original provider result, and
+other transport errors remain visible.
+
 Keyed `refresh(key=...)` follows the same one-attempt-per-10-seconds gate as `use_case()`.
 `force=True` is accepted for older callers, but it does not bypass the keyed runtime gate;
 explicit export and CLI commands use an internal aggregate fetch path.
@@ -281,7 +288,7 @@ logo; forks and derived services must use a different name.
 
 ## Trace events
 
-Use `log_events()` when your app has already observed tool calls or completion events and wants them available for eval evidence. The SDK does not execute tools and does not infer these events from provider requests. In live mode it immediately posts `{"logs": [], "events": [...]}` to the logs endpoint; in test mode the submitted events are available on `client.captured_events`.
+Use `log_events()` when your app has already observed tool calls or completion events and wants them available for eval evidence. The SDK does not execute tools and does not infer these events from provider requests. In live mode it immediately posts `{"logs": [], "events": [...]}` to the logs endpoint; in test mode the submitted events are available on `client.captured_events`. Error completion events whose `completion_output` is exactly one of the closed Req transport messages above, including the `failed to call LLM: ` prefix, are omitted after validation. Other events keep their IDs and order; if every event is omitted, no request is sent and the result reports zero accepted events.
 
 ```python
 client.log_events(

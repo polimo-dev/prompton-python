@@ -256,6 +256,40 @@ class TestLog:
         )
         client.close(timeout=0.1)
 
+    def test_closed_req_transport_errors_are_not_captured_or_redacted(self, snapshot_document):
+        seen = []
+        client = PromptOn(
+            mode="test",
+            disk_cache=False,
+            redact=lambda record: seen.append(record) or record,
+        )
+        client.load_use_cases(snapshot_document)
+        use_case = client.use_case("greeting")
+        closed = ProviderError(
+            "failed to send request: %Req.TransportError{reason: :closed}",
+            kind="transport",
+        )
+
+        with pytest.raises(ProviderError) as error:
+            use_case.track(lambda: (_ for _ in ()).throw(closed))
+
+        assert error.value is closed
+        assert client.captured == []
+        assert seen == []
+        client.close(timeout=0.1)
+
+    def test_other_transport_errors_are_still_captured(self, client):
+        use_case = client.use_case("greeting")
+
+        with pytest.raises(ProviderError):
+            use_case.track(
+                lambda: (_ for _ in ()).throw(ProviderError("connection refused", kind="transport"))
+            )
+
+        [logged] = client.captured
+        assert logged["status"] == "error"
+        assert logged["error"] == {"kind": "transport", "message": "connection refused"}
+
 
 class TestSnapshotSurface:
     def test_use_cases_info_reports_the_tier(self, client):
@@ -365,4 +399,56 @@ class TestTraceEvents:
             "logs": [],
             "events": [{**event, "sdk": {"name": "prompton-python", "version": prompton.VERSION}}],
         }
+        client.close(timeout=0.1)
+
+    def test_filters_closed_transport_completion_events_without_reordering_survivors(self):
+        client = PromptOn(mode="test", api_key=None, disk_cache=False, poll=False)
+        tool_event = self.event()
+        closed_event = {
+            "event_id": "evt-closed",
+            "trace_id": "trace-1",
+            "event_kind": "completion",
+            "status": "error",
+            "observed_at": "2026-09-28T00:00:01.000Z",
+            "completion_output": (
+                "failed to call LLM: failed to send request: %Req.TransportError{reason: :closed}"
+            ),
+        }
+        other_error = {
+            **closed_event,
+            "event_id": "evt-timeout",
+            "completion_output": "request timed out",
+        }
+
+        assert client.log_events([tool_event, closed_event, other_error]) == {
+            "accepted": 2,
+            "duplicates": 0,
+            "rejected": [],
+        }
+
+        assert [event["event_id"] for event in client.captured_events] == ["evt-1", "evt-timeout"]
+        client.close(timeout=0.1)
+
+    def test_all_closed_transport_completion_events_do_not_send_http(self):
+        transport = FakeTransport()
+        client = PromptOn(
+            mode="live",
+            api_key="ptn_sdkfixture_key",
+            host="http://ptn.test",
+            disk_cache=False,
+            poll=False,
+            transport=transport,
+        )
+        event = {
+            "event_id": "evt-closed",
+            "trace_id": "trace-1",
+            "event_kind": "completion",
+            "status": "error",
+            "observed_at": "2026-09-28T00:00:01.000Z",
+            "completion_output": "%Req.TransportError{reason: :closed}",
+        }
+
+        assert client.log_events([event]) == {"accepted": 0, "duplicates": 0, "rejected": []}
+
+        assert transport.generation_requests == []
         client.close(timeout=0.1)

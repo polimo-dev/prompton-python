@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Suppress the exact closed Req connection transport failure from generation logs and matching
+  error completion trace events before they reach redaction, test capture, buffering, or HTTP.
 - Retired message-slot expansion. A prompt message with `{"type": "slot"}` now raises
   `Message slots are not supported; compose conversation history in app code.` even when variables
   include a matching list; `{{ history }}` remains an ordinary template variable.
