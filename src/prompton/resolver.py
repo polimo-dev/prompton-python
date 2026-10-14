@@ -124,12 +124,16 @@ def resolve(
     if version_id is not None:
         version = snapshot.prompt_versions.get(version_id)
         if version is None:
+            if snapshot.schema_version >= 8:
+                raise UnresolvedError(use_case)
             warnings.append(f"missing_prompt_version: {version_id}")
 
     model = None
     if deployment.model_id is not None:
         model = snapshot.models.get(deployment.model_id)
         if model is None:
+            if snapshot.schema_version >= 8:
+                raise UnresolvedError(use_case)
             warnings.append(f"missing_model: {deployment.model_id}")
 
     runtime_kind = version.kind or entry.kind if version else entry.kind

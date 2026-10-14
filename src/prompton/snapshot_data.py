@@ -233,6 +233,10 @@ def _as_str(value: Any) -> str | None:
     return None
 
 
+def _strict_str(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _as_revision(value: Any, key: str) -> str | None:
     if value is None:
         return None
@@ -258,14 +262,15 @@ def _as_int(value: Any, default: int | None = None) -> int | None:
     return default
 
 
-def _as_positive_int(value: Any) -> int | None:
-    parsed = _as_int(value)
-    return parsed if parsed is not None and parsed > 0 else None
+def _strict_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
 
 
 def _model_key(provider: Any, model: Any) -> str | None:
-    provider_text = _as_str(provider)
-    model_text = _as_str(model)
+    provider_text = _strict_str(provider)
+    model_text = _strict_str(model)
     if provider_text is None or model_text is None:
         return None
     return f"{provider_text}:{model_text}"
@@ -349,7 +354,7 @@ def _decode_deployments(
             continue
         pins: dict[str, str] = {}
         if schema_version >= 8:
-            number = _as_positive_int(value.get("prompt_version"))
+            number = _strict_positive_int(value.get("prompt_version"))
             if number is not None:
                 pins["default"] = f"{key}@{number}"
             elif value.get("prompt_version") is not None:
@@ -365,17 +370,20 @@ def _decode_deployments(
                         warnings.append(f"invalid_prompt_pin: {key}/{name}")
             elif raw_pins is not None:
                 warnings.append(f"invalid_prompt_pins: {key}")
+        model_id = (
+            _model_key(value.get("provider"), value.get("model"))
+            if schema_version >= 8
+            else _as_str(value.get("model_id"))
+        )
+        if schema_version >= 8 and model_id is None:
+            warnings.append(f"invalid_model_ref: {key}")
         deployments[str(key)] = Deployment(
             id=None if schema_version >= 8 else _as_str(value.get("id")),
             use_case_key=(
                 _as_str(value.get("use_case_key")) or _as_str(value.get("prompt_key")) or str(key)
             ),
             revision=_as_revision(value.get("revision"), str(key)),
-            model_id=(
-                _model_key(value.get("provider"), value.get("model"))
-                if schema_version >= 8
-                else _as_str(value.get("model_id"))
-            ),
+            model_id=f"invalid:{key}" if schema_version >= 8 and model_id is None else model_id,
             params=stringify_keys(value.get("params")),
             provider_options=stringify_keys(value.get("provider_options")),
             prompt_pins=pins,
@@ -391,13 +399,25 @@ def _decode_prompt_versions(
     versions: dict[str, PromptVersion] = {}
     for entry_id, entry in _iter_by_id(raw, warnings):
         messages = _decode_messages(entry.get("messages"), warnings)
-        prompt_key = _as_str(entry.get("prompt"))
-        number = _as_int(entry.get("number"))
+        prompt_key = (
+            _strict_str(entry.get("prompt"))
+            if schema_version >= 8
+            else _as_str(entry.get("prompt"))
+        )
+        number = (
+            _strict_positive_int(entry.get("number"))
+            if schema_version >= 8
+            else _as_int(entry.get("number"))
+        )
         lookup_key = (
             f"{prompt_key}@{number}" if schema_version >= 8 and prompt_key and number else entry_id
         )
-        if schema_version >= 8 and (not prompt_key or number is None or number <= 0):
+        if schema_version >= 8 and (not prompt_key or number is None or lookup_key != entry_id):
             warnings.append(f"invalid_prompt_version: {entry_id}")
+            continue
+        if lookup_key in versions:
+            warnings.append(f"invalid_entry: duplicate:{lookup_key}")
+            continue
         versions[lookup_key] = PromptVersion(
             id=None if schema_version >= 8 else entry_id,
             lookup_key=lookup_key,
@@ -460,15 +480,25 @@ def _decode_models(raw: Any, schema_version: int, warnings: list[str]) -> dict[s
         capabilities = entry.get("capabilities")
         if not isinstance(capabilities, list):
             capabilities = [] if capabilities is None else [capabilities]
-        provider = _as_str(entry.get("provider"))
+        provider = (
+            _strict_str(entry.get("provider"))
+            if schema_version >= 8
+            else _as_str(entry.get("provider"))
+        )
         model = (
-            _as_str(entry.get("model"))
+            _strict_str(entry.get("model"))
             if schema_version >= 8
             else _as_str(entry.get("model_id"))
         )
         lookup_key = (
             f"{provider}:{model}" if schema_version >= 8 and provider and model else entry_id
         )
+        if schema_version >= 8 and (not provider or not model or lookup_key != entry_id):
+            warnings.append(f"invalid_entry: {entry_id}")
+            continue
+        if lookup_key in models:
+            warnings.append(f"invalid_entry: duplicate:{lookup_key}")
+            continue
         models[lookup_key] = Model(
             id=None if schema_version >= 8 else entry_id,
             lookup_key=lookup_key,

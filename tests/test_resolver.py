@@ -143,23 +143,59 @@ def test_schema8_scopes_prompt_versions_by_prompt_and_models_by_provider(snapsho
     assert review.messages == ({"role": "user", "content": "Review {{ item }}."},)
 
 
-def test_schema8_invalid_pins_and_missing_references_are_reported(snapshot_document):
-    invalid = readable_document(snapshot_document)
-    invalid["deployments"]["greeting"]["prompt_version"] = "latest"
-    invalid_snapshot = UseCaseDocument.from_mapping(invalid)
-    with pytest.raises(UnknownPromptError):
-        resolve(invalid_snapshot, "greeting")
+def test_schema8_invalid_pins_and_missing_references_fail_closed(snapshot_document):
+    for prompt_version in ("2", "2abc", 2.9, 0):
+        invalid = readable_document(snapshot_document)
+        invalid["deployments"]["greeting"]["prompt_version"] = prompt_version
+        invalid_snapshot = UseCaseDocument.from_mapping(invalid)
+        with pytest.raises(UnknownPromptError):
+            resolve(invalid_snapshot, "greeting")
 
-    missing = readable_document(snapshot_document)
-    missing["deployments"]["greeting"]["prompt_version"] = 99
-    missing["deployments"]["greeting"]["model"] = "missing/model"
-    resolution = resolve(UseCaseDocument.from_mapping(missing), "greeting")
-    assert resolution.model is None
-    assert resolution.prompt_version is None
-    assert resolution.warnings == (
-        "missing_prompt_version: greeting@99",
-        "missing_model: openrouter:missing/model",
-    )
+    missing_version = readable_document(snapshot_document)
+    missing_version["deployments"]["greeting"]["prompt_version"] = 99
+    with pytest.raises(UnresolvedError):
+        resolve(UseCaseDocument.from_mapping(missing_version), "greeting")
+
+    missing_model = readable_document(snapshot_document)
+    missing_model["deployments"]["greeting"]["model"] = "missing/model"
+    with pytest.raises(UnresolvedError):
+        resolve(UseCaseDocument.from_mapping(missing_model), "greeting")
+
+
+def test_schema8_composite_keys_must_match_embedded_fields(snapshot_document):
+    bad_version = readable_document(snapshot_document)
+    bad_version["prompt_versions"]["greeting@1"]["prompt"] = "review"
+    with pytest.raises(UnresolvedError):
+        resolve(UseCaseDocument.from_mapping(bad_version), "greeting")
+
+    bad_number = readable_document(snapshot_document)
+    bad_number["prompt_versions"]["greeting@1"]["number"] = 1.9
+    with pytest.raises(UnresolvedError):
+        resolve(UseCaseDocument.from_mapping(bad_number), "greeting")
+
+    bad_model = readable_document(snapshot_document)
+    bad_model["models"]["openrouter:openai/gpt-4o-mini"]["provider"] = "direct"
+    with pytest.raises(UnresolvedError):
+        resolve(UseCaseDocument.from_mapping(bad_model), "greeting")
+
+    bad_deployment_model = readable_document(snapshot_document)
+    bad_deployment_model["deployments"]["greeting"]["model"] = 123
+    with pytest.raises(UnresolvedError):
+        resolve(UseCaseDocument.from_mapping(bad_deployment_model), "greeting")
+
+    duplicate = readable_document(snapshot_document)
+    duplicate["models"]["direct:openai/gpt-4o-mini"] = {
+        "provider": "openrouter",
+        "model": "openai/gpt-4o-mini",
+        "display_name": "alias",
+        "metadata": {},
+        "provider_options": {"only": ["Wrong"]},
+        "capabilities": [],
+        "status": "active",
+    }
+    assert resolve(UseCaseDocument.from_mapping(duplicate), "greeting").provider_options == {
+        "only": ["OpenAI"]
+    }
 
 
 def test_the_source_and_etag_travel_with_the_resolution(snapshot):

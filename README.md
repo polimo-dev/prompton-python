@@ -202,7 +202,7 @@ def call():
 ## Other entry points
 
 ```python
-client.prompt_names("support_reply")  # ["default", "ko"] - exactly what use_case() accepts
+client.prompt_names("support_reply")  # ["default"] - exactly what use_case() accepts
 client.filled_prompt("support_reply", variables={...})  # prompt endpoint smoke test
 client.refresh(key="support_reply")  # fetch one key now, subject to the 10 s attempt gate
 client.export_use_cases("app/prompton/use-cases.production.json")  # build a bundle
