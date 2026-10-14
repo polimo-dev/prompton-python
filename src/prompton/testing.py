@@ -58,29 +58,29 @@ def make_use_case_document(
         "models": {},
     }
 
-    for index, (key, spec) in enumerate(use_cases.items(), start=1):
+    for _index, (key, spec) in enumerate(use_cases.items(), start=1):
         spec = dict(spec)
         kind = spec.get("kind", "chat")
-        model_key = f"model-{index:04d}"
+        provider = spec.get("provider", "openrouter")
+        model_name = spec.get("model", _DEFAULT_MODEL)
+        model_key = f"{provider}:{model_name}"
         document["models"][model_key] = {
-            "id": model_key,
-            "provider": spec.get("provider", "openrouter"),
-            "model_id": spec.get("model", _DEFAULT_MODEL),
-            "display_name": spec.get("model", _DEFAULT_MODEL),
+            "provider": provider,
+            "model": model_name,
+            "display_name": model_name,
             "metadata": {},
             "provider_options": spec.get("model_provider_options", {}),
             "capabilities": [],
             "status": "active",
         }
         document["prompts"][key] = {
-            "id": f"use-case-{index:04d}",
             "kind": kind,
             "variables": spec.get("variables", []),
             "default_params": spec.get("default_params", {}),
             "payload_policy": spec.get("payload_policy"),
         }
 
-        pins: dict[str, str] = {}
+        pins: dict[str, int] = {}
         if kind != "embedding":
             variants: dict[str, Any] = {}
             if "messages" in spec or "text" in spec:
@@ -89,24 +89,25 @@ def make_use_case_document(
             if not variants:
                 variants["default"] = [] if kind == "chat" else ""
             for order, (name, body) in enumerate(variants.items(), start=1):
-                version_id = f"version-{index:04d}-{order:02d}"
-                document["prompt_versions"][version_id] = {
-                    "id": version_id,
-                    "prompt_id": f"prompt-{index:04d}",
+                version_key = f"{key}@{order}"
+                document["prompt_versions"][version_key] = {
+                    "prompt": key,
                     "number": order,
+                    "kind": kind,
                     "engine": spec.get("engine", "liquid"),
                     "messages": body if kind == "chat" else None,
                     "text_template": body if kind == "text" else None,
                 }
-                pins[name] = version_id
+                pins[name] = order
 
         document["deployments"][key] = {
-            "id": f"deployment-{index:04d}",
             "revision": spec.get("revision", "v2026.09.30-1"),
-            "model_id": model_key,
+            "provider": provider,
+            "model": model_name,
             "params": spec.get("params", {}),
             "provider_options": spec.get("provider_options", {}),
             "prompt_pins": pins,
+            "prompt_version": pins.get("default"),
         }
 
     return document

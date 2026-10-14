@@ -4,7 +4,7 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d001",
+        "deployment_id": null,
         "key": "greeting",
         "kind": "chat",
         "messages": [
@@ -18,13 +18,13 @@
           }
         ],
         "model": "openai/gpt-4o-mini",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "model_id": null,
         "params": {
           "max_tokens": 512,
           "temperature": 0.2
         },
         "prompt_version": {
-          "id": "0198f2a1-0000-7000-8000-00000000a001",
+          "id": null,
           "number": 2
         },
         "provider": "openrouter",
@@ -52,7 +52,7 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d001",
+        "deployment_id": null,
         "key": "greeting",
         "kind": "chat",
         "messages": [
@@ -66,13 +66,13 @@
           }
         ],
         "model": "openai/gpt-4o-mini",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "model_id": null,
         "params": {
           "max_tokens": 512,
           "temperature": 0.2
         },
         "prompt_version": {
-          "id": "0198f2a1-0000-7000-8000-00000000a001",
+          "id": null,
           "number": 2
         },
         "provider": "openrouter",
@@ -102,7 +102,7 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d001",
+        "deployment_id": null,
         "key": "greeting",
         "kind": "chat",
         "messages": [
@@ -116,13 +116,13 @@
           }
         ],
         "model": "openai/gpt-4o-mini",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "model_id": null,
         "params": {
           "max_tokens": 512,
           "temperature": 0.2
         },
         "prompt_version": {
-          "id": "0198f2a1-0000-7000-8000-00000000a002",
+          "id": null,
           "number": 1
         },
         "provider": "openrouter",
@@ -154,7 +154,7 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d001",
+        "deployment_id": null,
         "key": "greeting",
         "kind": "chat",
         "messages": [
@@ -168,13 +168,13 @@
           }
         ],
         "model": "openai/gpt-4o-mini",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "model_id": null,
         "params": {
           "max_tokens": 512,
           "temperature": 0.2
         },
         "prompt_version": {
-          "id": "0198f2a1-0000-7000-8000-00000000a001",
+          "id": null,
           "number": 2
         },
         "provider": "openrouter",
@@ -217,7 +217,7 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d004",
+        "deployment_id": null,
         "key": "tool_chat",
         "kind": "chat",
         "messages": [
@@ -255,10 +255,10 @@
           }
         ],
         "model": "openai/gpt-4o-mini",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "model_id": null,
         "params": {},
         "prompt_version": {
-          "id": "0198f2a1-0000-7000-8000-00000000a005",
+          "id": null,
           "number": 1
         },
         "provider": "openrouter",
@@ -304,16 +304,16 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d002",
+        "deployment_id": null,
         "key": "summarize",
         "kind": "text",
         "model": "openai/gpt-4o-mini",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "model_id": null,
         "params": {
           "temperature": 0.0
         },
         "prompt_version": {
-          "id": "0198f2a1-0000-7000-8000-00000000a003",
+          "id": null,
           "number": 4
         },
         "provider": "openrouter",
@@ -346,16 +346,16 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d002",
+        "deployment_id": null,
         "key": "summarize",
         "kind": "text",
         "model": "openai/gpt-4o-mini",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "model_id": null,
         "params": {
           "temperature": 0.0
         },
         "prompt_version": {
-          "id": "0198f2a1-0000-7000-8000-00000000a003",
+          "id": null,
           "number": 4
         },
         "provider": "openrouter",
@@ -381,11 +381,11 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d003",
+        "deployment_id": null,
         "key": "embed",
         "kind": "embedding",
         "model": "openai/text-embedding-3-small",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e002",
+        "model_id": null,
         "params": {
           "dimensions": 256
         },
@@ -406,11 +406,11 @@
       "document_ref": "production",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d003",
+        "deployment_id": null,
         "key": "embed",
         "kind": "embedding",
         "model": "openai/text-embedding-3-small",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e002",
+        "model_id": null,
         "params": {
           "dimensions": 256
         },
@@ -451,7 +451,7 @@
       "document_ref": "staging",
       "environment": "staging",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d011",
+        "deployment_id": null,
         "key": "greeting",
         "kind": "chat",
         "messages": [
@@ -465,14 +465,14 @@
           }
         ],
         "model": "openai/gpt-4o-mini",
-        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "model_id": null,
         "params": {
           "max_tokens": 512,
           "temperature": 0.9,
           "top_p": 0.8
         },
         "prompt_version": {
-          "id": "0198f2a1-0000-7000-8000-00000000a004",
+          "id": null,
           "number": 3
         },
         "provider": "openrouter",
@@ -535,17 +535,18 @@
     "degraded": {
       "deployments": {
         "greeting": {
-          "id": "0198f2a1-0000-7000-8000-00000000d021",
-          "model_id": "0198f2a1-0000-7000-8000-0000000000fe",
+          "revision": "v2026.09.30-1",
+          "provider": "openrouter",
+          "model": "missing/model",
           "params": {},
           "provider_options": {
             "only": [
               "OpenAI"
             ]
           },
-          "revision": "v2026.09.30-1",
-          "template_pins": {
-            "default": "0198f2a1-0000-7000-8000-0000000000ff"
+          "prompt_version": 99,
+          "prompt_pins": {
+            "default": 99
           }
         }
       },
@@ -558,7 +559,6 @@
           "default_params": {
             "temperature": 0.4
           },
-          "id": "0198f2a1-0000-7000-8000-00000000c001",
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -575,18 +575,21 @@
     "production": {
       "deployments": {
         "embed": {
-          "id": "0198f2a1-0000-7000-8000-00000000d003",
-          "model_id": "0198f2a1-0000-7000-8000-00000000e002",
+          "revision": "v2026.09.30-2",
+          "provider": "openrouter",
+          "model": "openai/text-embedding-3-small",
           "params": {
             "dimensions": 256
           },
           "provider_options": {},
-          "revision": "v2026.09.30-2",
-          "template_pins": {}
+          "api": null,
+          "request_path": null,
+          "prompt_pins": {}
         },
         "greeting": {
-          "id": "0198f2a1-0000-7000-8000-00000000d001",
-          "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+          "revision": "v2026.09.30-3",
+          "provider": "openrouter",
+          "model": "openai/gpt-4o-mini",
           "params": {
             "temperature": 0.2
           },
@@ -594,44 +597,50 @@
             "allow_fallbacks": true,
             "sort": null
           },
-          "revision": "v2026.09.30-3",
-          "template_pins": {
-            "default": "0198f2a1-0000-7000-8000-00000000a001",
-            "ko": "0198f2a1-0000-7000-8000-00000000a002"
-          }
+          "api": null,
+          "request_path": null,
+          "prompt_pins": {
+            "default": 2,
+            "ko": 1
+          },
+          "prompt_version": 2
         },
         "summarize": {
-          "id": "0198f2a1-0000-7000-8000-00000000d002",
-          "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+          "revision": "v2026.09.30-1",
+          "provider": "openrouter",
+          "model": "openai/gpt-4o-mini",
           "params": {},
           "provider_options": {},
-          "revision": "v2026.09.30-1",
-          "template_pins": {
-            "default": "0198f2a1-0000-7000-8000-00000000a003"
-          }
+          "api": null,
+          "request_path": null,
+          "prompt_pins": {
+            "default": 4
+          },
+          "prompt_version": 4
         },
         "tool_chat": {
-          "id": "0198f2a1-0000-7000-8000-00000000d004",
-          "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+          "revision": "v2026.09.30-1",
+          "provider": "openrouter",
+          "model": "openai/gpt-4o-mini",
           "params": {},
           "provider_options": {},
-          "revision": "v2026.09.30-1",
-          "template_pins": {
-            "default": "0198f2a1-0000-7000-8000-00000000a005"
-          }
+          "api": null,
+          "request_path": null,
+          "prompt_pins": {
+            "default": 1
+          },
+          "prompt_version": 1
         }
       },
       "environment": "production",
       "models": {
-        "0198f2a1-0000-7000-8000-00000000e001": {
+        "openrouter:openai/gpt-4o-mini": {
           "capabilities": [
             "tools",
             "streaming"
           ],
           "display_name": "GPT-4o mini",
-          "id": "0198f2a1-0000-7000-8000-00000000e001",
           "metadata": {},
-          "model_id": "openai/gpt-4o-mini",
           "provider": "openrouter",
           "provider_options": {
             "allow_fallbacks": false,
@@ -639,24 +648,23 @@
               "OpenAI"
             ]
           },
-          "status": "active"
+          "status": "active",
+          "model": "openai/gpt-4o-mini"
         },
-        "0198f2a1-0000-7000-8000-00000000e002": {
+        "openrouter:openai/text-embedding-3-small": {
           "capabilities": [],
           "display_name": "text-embedding-3-small",
-          "id": "0198f2a1-0000-7000-8000-00000000e002",
           "metadata": {},
-          "model_id": "openai/text-embedding-3-small",
           "provider": "openrouter",
           "provider_options": {},
-          "status": "active"
+          "status": "active",
+          "model": "openai/text-embedding-3-small"
         }
       },
       "project": "sdkfixture",
       "prompt_versions": {
-        "0198f2a1-0000-7000-8000-00000000a001": {
+        "greeting@2": {
           "engine": "liquid",
-          "id": "0198f2a1-0000-7000-8000-00000000a001",
           "messages": [
             {
               "content": "You are a friendly greeter. Answer in one line.",
@@ -668,12 +676,11 @@
             }
           ],
           "number": 2,
-          "prompt_template_id": "0198f2a1-0000-7000-8000-00000000b001",
-          "text_template": null
+          "text_template": null,
+          "prompt": "greeting"
         },
-        "0198f2a1-0000-7000-8000-00000000a002": {
+        "greeting@1": {
           "engine": "liquid",
-          "id": "0198f2a1-0000-7000-8000-00000000a002",
           "messages": [
             {
               "content": "너는 친절한 인사 도우미다. 한 줄로 답한다.",
@@ -685,20 +692,18 @@
             }
           ],
           "number": 1,
-          "prompt_template_id": "0198f2a1-0000-7000-8000-00000000b001",
-          "text_template": null
+          "text_template": null,
+          "prompt": "greeting"
         },
-        "0198f2a1-0000-7000-8000-00000000a003": {
+        "summarize@4": {
           "engine": "liquid",
-          "id": "0198f2a1-0000-7000-8000-00000000a003",
           "messages": [],
           "number": 4,
-          "prompt_template_id": "0198f2a1-0000-7000-8000-00000000b002",
-          "text_template": "Summarize the following notes in one paragraph.\n{% for item in items %}- {{ item }}\n{% endfor %}"
+          "text_template": "Summarize the following notes in one paragraph.\n{% for item in items %}- {{ item }}\n{% endfor %}",
+          "prompt": "summarize"
         },
-        "0198f2a1-0000-7000-8000-00000000a005": {
+        "tool_chat@1": {
           "engine": "liquid",
-          "id": "0198f2a1-0000-7000-8000-00000000a005",
           "messages": [
             {
               "content": "Continue with {{ input }}.",
@@ -734,14 +739,13 @@
             }
           ],
           "number": 1,
-          "prompt_template_id": "0198f2a1-0000-7000-8000-00000000b003",
-          "text_template": null
+          "text_template": null,
+          "prompt": "tool_chat"
         }
       },
       "prompts": {
         "draft": {
           "default_params": {},
-          "id": "0198f2a1-0000-7000-8000-00000000c004",
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -754,7 +758,6 @@
         },
         "embed": {
           "default_params": {},
-          "id": "0198f2a1-0000-7000-8000-00000000c003",
           "kind": "embedding",
           "payload_policy": {
             "encrypt": false,
@@ -776,7 +779,6 @@
             "max_tokens": 512,
             "temperature": 0.7
           },
-          "id": "0198f2a1-0000-7000-8000-00000000c001",
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -797,7 +799,6 @@
           "default_params": {
             "temperature": 0.0
           },
-          "id": "0198f2a1-0000-7000-8000-00000000c002",
           "kind": "text",
           "payload_policy": {
             "encrypt": false,
@@ -816,7 +817,6 @@
         },
         "tool_chat": {
           "default_params": {},
-          "id": "0198f2a1-0000-7000-8000-00000000c005",
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -839,30 +839,31 @@
     "staging": {
       "deployments": {
         "greeting": {
-          "id": "0198f2a1-0000-7000-8000-00000000d011",
-          "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+          "revision": "v2026.09.30-7",
+          "provider": "openrouter",
+          "model": "openai/gpt-4o-mini",
           "params": {
             "temperature": 0.9,
             "top_p": 0.8
           },
           "provider_options": {},
-          "revision": "v2026.09.30-7",
-          "template_pins": {
-            "default": "0198f2a1-0000-7000-8000-00000000a004"
-          }
+          "api": null,
+          "request_path": null,
+          "prompt_pins": {
+            "default": 3
+          },
+          "prompt_version": 3
         }
       },
       "environment": "staging",
       "models": {
-        "0198f2a1-0000-7000-8000-00000000e001": {
+        "openrouter:openai/gpt-4o-mini": {
           "capabilities": [
             "tools",
             "streaming"
           ],
           "display_name": "GPT-4o mini",
-          "id": "0198f2a1-0000-7000-8000-00000000e001",
           "metadata": {},
-          "model_id": "openai/gpt-4o-mini",
           "provider": "openrouter",
           "provider_options": {
             "allow_fallbacks": false,
@@ -870,14 +871,14 @@
               "OpenAI"
             ]
           },
-          "status": "active"
+          "status": "active",
+          "model": "openai/gpt-4o-mini"
         }
       },
       "project": "sdkfixture",
       "prompt_versions": {
-        "0198f2a1-0000-7000-8000-00000000a004": {
+        "greeting@3": {
           "engine": "liquid",
-          "id": "0198f2a1-0000-7000-8000-00000000a004",
           "messages": [
             {
               "content": "You are a greeter (staging build).",
@@ -889,8 +890,8 @@
             }
           ],
           "number": 3,
-          "prompt_template_id": "0198f2a1-0000-7000-8000-00000000b001",
-          "text_template": null
+          "text_template": null,
+          "prompt": "greeting"
         }
       },
       "prompts": {
@@ -899,7 +900,6 @@
             "max_tokens": 512,
             "temperature": 0.7
           },
-          "id": "0198f2a1-0000-7000-8000-00000000c001",
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,

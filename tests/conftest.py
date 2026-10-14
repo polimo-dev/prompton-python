@@ -177,8 +177,13 @@ def snapshot_bytes(snapshot_document: dict[str, Any]) -> bytes:
 
 
 def readable_document(document: dict[str, Any]) -> dict[str, Any]:
-    """Convert the test document into the schema v1 aggregate readable-resource wire shape."""
+    """Return the schema v1 aggregate readable-resource wire shape."""
     legacy = json.loads(json.dumps(document))
+    if all(
+        isinstance(deployment, dict) and "provider" in deployment and "model" in deployment
+        for deployment in legacy.get("deployments", {}).values()
+    ):
+        return legacy
     models_by_id = legacy["models"]
     versions_by_id = legacy["prompt_versions"]
     deployments: dict[str, Any] = {}

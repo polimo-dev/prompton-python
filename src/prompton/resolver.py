@@ -53,6 +53,7 @@ class Resolution:
     provider_options: dict[str, Any] = field(default_factory=dict)
     messages: tuple[dict[str, Any], ...] | None = None
     text_template: str | None = None
+    decision: dict[str, Any] | None = None
     available_prompts: tuple[str, ...] = ()
     api: str | None = None
     request_path: str | None = None
@@ -132,6 +133,7 @@ def resolve(
     runtime_kind = version.kind or entry.kind if version else entry.kind
     messages = version.messages if (version and runtime_kind == "chat") else None
     text_template = version.text_template if (version and runtime_kind == "text") else None
+    decision = version.decision if (version and runtime_kind == "decision") else None
 
     return Resolution(
         use_case=entry.key,
@@ -151,6 +153,7 @@ def resolve(
         ),
         messages=messages,
         text_template=text_template,
+        decision=decision,
         available_prompts=available,
         variables=entry.variables,
         payload_policy=entry.payload_policy,

@@ -20,15 +20,18 @@ def test_schema1_tools_are_preserved_and_message_slots_are_rejected() -> None:
             "deployments": {
                 "chat": {
                     "prompt_key": "chat",
-                    "model_id": "m",
+                    "provider": "openrouter",
+                    "model": "openai/gpt-4o-mini",
                     "api": "chat_completions",
                     "request_path": "/api/v1/chat/completions",
-                    "template_pins": {"default": "v"},
+                    "prompt_pins": {"default": 1},
+                    "prompt_version": 1,
                 }
             },
             "prompt_versions": {
-                "v": {
-                    "id": "v",
+                "chat@1": {
+                    "prompt": "chat",
+                    "number": 1,
                     "kind": "chat",
                     "engine": "liquid",
                     "messages": [
@@ -68,10 +71,9 @@ def test_schema1_tools_are_preserved_and_message_slots_are_rejected() -> None:
                 }
             },
             "models": {
-                "m": {
-                    "id": "m",
+                "openrouter:openai/gpt-4o-mini": {
                     "provider": "openrouter",
-                    "model_id": "openai/gpt-4o-mini",
+                    "model": "openai/gpt-4o-mini",
                 }
             },
         }

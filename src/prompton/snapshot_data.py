@@ -188,11 +188,9 @@ class UseCaseDocument:
             for key, value in raw_use_cases.items()
             if isinstance(value, Mapping)
         }
-        deployments = _decode_deployments(normalized.get("deployments"), version, warnings)
-        prompt_versions = _decode_prompt_versions(
-            normalized.get("prompt_versions"), version, warnings
-        )
-        models = _decode_models(normalized.get("models"), version, warnings)
+        deployments = _decode_deployments(normalized.get("deployments"), warnings)
+        prompt_versions = _decode_prompt_versions(normalized.get("prompt_versions"), warnings)
+        models = _decode_models(normalized.get("models"), warnings)
 
         return cls(
             schema_version=version,
@@ -405,9 +403,7 @@ def _decode_payload_policy(raw: Any, warnings: list[str]) -> PayloadPolicy | Non
     )
 
 
-def _decode_deployments(
-    raw: Any, _schema_version: int, warnings: list[str]
-) -> dict[str, Deployment]:
+def _decode_deployments(raw: Any, warnings: list[str]) -> dict[str, Deployment]:
     if raw is None:
         return {}
     if not isinstance(raw, Mapping):
@@ -419,26 +415,26 @@ def _decode_deployments(
             warnings.append(f"invalid_deployment: {key}")
             continue
         pins: dict[str, str] = {}
-        number = _strict_positive_int(value.get("prompt_version"))
-        if number is not None:
-            pins["default"] = f"{key}@{number}"
+        raw_pins = value.get("prompt_pins")
+        if isinstance(raw_pins, Mapping):
+            for name, raw_number in raw_pins.items():
+                name_str = _as_str(name)
+                pin_number = _strict_positive_int(raw_number)
+                if name_str and pin_number is not None:
+                    pins[name_str] = f"{key}@{pin_number}"
+                else:
+                    warnings.append(f"invalid_prompt_pin: {key}/{name}")
         else:
-            raw_pins = value.get("prompt_pins") or value.get("template_pins")
-            if isinstance(raw_pins, Mapping):
-                for name, version_id in raw_pins.items():
-                    name_str, id_str = _as_str(name), _as_str(version_id)
-                    if name_str and id_str:
-                        pins[name_str] = id_str
-                    else:
-                        warnings.append(f"invalid_prompt_pin: {key}/{name}")
+            number = _strict_positive_int(value.get("prompt_version"))
+            if number is not None:
+                pins["default"] = f"{key}@{number}"
             elif value.get("prompt_version") is not None:
                 warnings.append(f"invalid_prompt_pin: {key}/default")
-        readable_model_id = _model_key(value.get("provider"), value.get("model"))
-        model_id = readable_model_id or _as_str(value.get("model_id"))
+        model_id = _model_key(value.get("provider"), value.get("model"))
         if model_id is None:
             warnings.append(f"invalid_model_ref: {key}")
         deployments[str(key)] = Deployment(
-            id=None if readable_model_id is not None else _as_str(value.get("id")),
+            id=None,
             use_case_key=(
                 _as_str(value.get("use_case_key")) or _as_str(value.get("prompt_key")) or str(key)
             ),
@@ -453,9 +449,7 @@ def _decode_deployments(
     return deployments
 
 
-def _decode_prompt_versions(
-    raw: Any, _schema_version: int, warnings: list[str]
-) -> dict[str, PromptVersion]:
+def _decode_prompt_versions(raw: Any, warnings: list[str]) -> dict[str, PromptVersion]:
     versions: dict[str, PromptVersion] = {}
     for entry_id, entry in _iter_by_id(raw, warnings):
         messages = _decode_messages(entry.get("messages"), warnings)
@@ -468,19 +462,17 @@ def _decode_prompt_versions(
         if readable_key is not None and readable_key != entry_id:
             warnings.append(f"invalid_prompt_version: {entry_id}")
             continue
-        lookup_key = readable_key or entry_id
-        if lookup_key in versions:
-            warnings.append(f"invalid_entry: duplicate:{lookup_key}")
+        if readable_key is None:
+            warnings.append(f"invalid_prompt_version: {entry_id}")
             continue
-        versions[lookup_key] = PromptVersion(
-            id=None if readable_key is not None else entry_id,
-            lookup_key=lookup_key,
-            prompt_id=(
-                prompt_key
-                or _as_str(entry.get("prompt_id"))
-                or _as_str(entry.get("prompt_template_id"))
-            ),
-            number=number or _as_int(entry.get("number")),
+        if readable_key in versions:
+            warnings.append(f"invalid_entry: duplicate:{readable_key}")
+            continue
+        versions[readable_key] = PromptVersion(
+            id=None,
+            lookup_key=readable_key,
+            prompt_id=prompt_key,
+            number=number,
             engine=_enum(entry.get("engine"), _ENGINES, "liquid", "unknown_engine", warnings),
             messages=messages,
             text_template=_as_str(entry.get("text_template")),
@@ -528,26 +520,24 @@ def _decode_tools(raw: Any, warnings: list[str]) -> dict[str, Any] | None:
     return tools
 
 
-def _decode_models(raw: Any, _schema_version: int, warnings: list[str]) -> dict[str, Model]:
+def _decode_models(raw: Any, warnings: list[str]) -> dict[str, Model]:
     models: dict[str, Model] = {}
     for entry_id, entry in _iter_by_id(raw, warnings):
         capabilities = entry.get("capabilities")
         if not isinstance(capabilities, list):
             capabilities = [] if capabilities is None else [capabilities]
         provider = _strict_str(entry.get("provider"))
-        readable_model = _strict_str(entry.get("model"))
-        model = readable_model or _as_str(entry.get("model_id"))
-        readable_key = f"{provider}:{readable_model}" if provider and readable_model else None
-        if readable_key is not None and readable_key != entry_id:
+        model = _strict_str(entry.get("model"))
+        readable_key = f"{provider}:{model}" if provider and model else None
+        if readable_key is None or readable_key != entry_id:
             warnings.append(f"invalid_entry: {entry_id}")
             continue
-        lookup_key = readable_key or entry_id
-        if lookup_key in models:
-            warnings.append(f"invalid_entry: duplicate:{lookup_key}")
+        if readable_key in models:
+            warnings.append(f"invalid_entry: duplicate:{readable_key}")
             continue
-        models[lookup_key] = Model(
-            id=None if readable_key is not None else entry_id,
-            lookup_key=lookup_key,
+        models[readable_key] = Model(
+            id=None,
+            lookup_key=readable_key,
             provider=provider,
             model_id=model,
             display_name=_as_str(entry.get("display_name")),
@@ -568,16 +558,8 @@ def _iter_by_id(raw: Any, warnings: list[str]):
     if isinstance(raw, Mapping):
         for key, entry in raw.items():
             if isinstance(entry, Mapping):
-                yield _as_str(entry.get("id")) or str(key), entry
+                yield str(key), entry
             else:
                 warnings.append(f"invalid_entry: {key}")
-        return
-    if isinstance(raw, list):
-        for entry in raw:
-            entry_id = _as_str(entry.get("id")) if isinstance(entry, Mapping) else None
-            if entry_id:
-                yield entry_id, entry
-            else:
-                warnings.append(f"invalid_entry: {entry!r}")
         return
     warnings.append(f"invalid_collection: {raw!r}")

@@ -176,24 +176,18 @@ class TestTenSecondCache:
             environment="production",
             summarize={"kind": "text", "text": "summarize", "model": "provider/model-b"},
         )
-        shared_model_id = "shared-model"
-        greeting_model_id = next(iter(greeting["models"]))
-        summarize_model_id = next(iter(summarize["models"]))
-        greeting["models"][shared_model_id] = greeting["models"].pop(greeting_model_id)
-        greeting["models"][shared_model_id]["id"] = shared_model_id
-        greeting["deployments"]["greeting"]["model_id"] = shared_model_id
-        summarize["models"][shared_model_id] = summarize["models"].pop(summarize_model_id)
-        summarize["models"][shared_model_id]["id"] = shared_model_id
-        summarize["deployments"]["summarize"]["model_id"] = shared_model_id
-
         transport = FakeTransport()
         transport.push(snapshot_ok(greeting, '"greeting"'))
         transport.push(snapshot_ok(summarize, '"summarize"'))
         first = build(tmp_path, transport)
         first.start()
-        assert first.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
         assert (
-            first.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+            first.current("greeting").data.models["openrouter:provider/model-a"].model_id
+            == "provider/model-a"
+        )
+        assert (
+            first.current("summarize").data.models["openrouter:provider/model-b"].model_id
+            == "provider/model-b"
         )
 
         down = FakeTransport()
@@ -202,11 +196,11 @@ class TestTenSecondCache:
         restarted = build(tmp_path, down)
         restarted.start()
         assert (
-            restarted.current("greeting").data.models[shared_model_id].model_id
+            restarted.current("greeting").data.models["openrouter:provider/model-a"].model_id
             == "provider/model-a"
         )
         assert (
-            restarted.current("summarize").data.models[shared_model_id].model_id
+            restarted.current("summarize").data.models["openrouter:provider/model-b"].model_id
             == "provider/model-b"
         )
 
@@ -241,8 +235,11 @@ class TestTenSecondCache:
 
         monkeypatch.setattr("prompton.store.UseCaseDocument.from_json", slow_from_json)
         entry = store.current("greeting")
-        assert entry.data.models["model-0001"].model_id == "provider/old"
-        assert store.current("greeting").data.models["model-0001"].model_id == "provider/old"
+        assert entry.data.models["openrouter:provider/old"].model_id == "provider/old"
+        assert (
+            store.current("greeting").data.models["openrouter:provider/old"].model_id
+            == "provider/old"
+        )
 
     def test_slow_drip_http_body_uses_stale_value_and_cannot_late_install(self, tmp_path):
         initial = make_use_case_document(
@@ -298,15 +295,18 @@ class TestTenSecondCache:
             entry = store.current("greeting")
             elapsed = time.monotonic() - started
             assert elapsed < 1.15
-            assert entry.data.models["model-0001"].model_id == "provider/old"
+            assert entry.data.models["openrouter:provider/old"].model_id == "provider/old"
 
             time.sleep(0.4)
-            assert store.current("greeting").data.models["model-0001"].model_id == "provider/old"
+            assert (
+                store.current("greeting").data.models["openrouter:provider/old"].model_id
+                == "provider/old"
+            )
         finally:
             server.shutdown()
             server.server_close()
 
-    def test_each_key_keeps_its_own_document_when_shared_model_ids_change(self, tmp_path):
+    def test_each_key_keeps_its_own_document_when_models_change(self, tmp_path):
         greeting = make_use_case_document(
             project="demo",
             environment="production",
@@ -317,27 +317,24 @@ class TestTenSecondCache:
             environment="production",
             summarize={"kind": "text", "text": "summarize", "model": "provider/model-b"},
         )
-        shared_model_id = "shared-model"
-        greeting_model_id = next(iter(greeting["models"]))
-        summarize_model_id = next(iter(summarize["models"]))
-        greeting["models"][shared_model_id] = greeting["models"].pop(greeting_model_id)
-        greeting["models"][shared_model_id]["id"] = shared_model_id
-        greeting["deployments"]["greeting"]["model_id"] = shared_model_id
-        summarize["models"][shared_model_id] = summarize["models"].pop(summarize_model_id)
-        summarize["models"][shared_model_id]["id"] = shared_model_id
-        summarize["deployments"]["summarize"]["model_id"] = shared_model_id
-
         transport = FakeTransport()
         transport.push(snapshot_ok(greeting, '"greeting"'))
         transport.push(snapshot_ok(summarize, '"summarize"'))
         store = build(tmp_path, transport)
         store.start()
 
-        assert store.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
         assert (
-            store.current("summarize").data.models[shared_model_id].model_id == "provider/model-b"
+            store.current("greeting").data.models["openrouter:provider/model-a"].model_id
+            == "provider/model-a"
         )
-        assert store.current("greeting").data.models[shared_model_id].model_id == "provider/model-a"
+        assert (
+            store.current("summarize").data.models["openrouter:provider/model-b"].model_id
+            == "provider/model-b"
+        )
+        assert (
+            store.current("greeting").data.models["openrouter:provider/model-a"].model_id
+            == "provider/model-a"
+        )
         assert [
             request["url"].split("/api/v1", 1)[1].split("?", 1)[0]
             for request in transport.snapshot_requests

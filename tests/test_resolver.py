@@ -77,9 +77,9 @@ def test_unknown_use_case_and_undeployed_use_case_are_different_errors(snapshot)
 
 def test_a_dangling_reference_fails_closed(snapshot):
     document = make_use_case_document(greeting={"messages": [{"role": "user", "content": "hi"}]})
-    document["deployments"]["greeting"]["model_id"] = "gone"
-    document["deployments"]["greeting"]["prompt_pins"]["default"] = "also-gone"
-    with pytest.raises(UnresolvedError):
+    document["deployments"]["greeting"]["model"] = "gone/model"
+    document["deployments"]["greeting"]["prompt_pins"]["default"] = 99
+    with pytest.raises((UnresolvedError, UnknownPromptError)):
         resolve(UseCaseDocument.from_mapping(document), "greeting")
 
 
@@ -202,13 +202,13 @@ def test_schema1_scopes_prompt_versions_by_prompt_and_models_by_provider(snapsho
 def test_schema1_invalid_pins_and_missing_references_fail_closed(snapshot_document):
     for prompt_version in ("2", "2abc", 2.9, 0):
         invalid = readable_document(snapshot_document)
-        invalid["deployments"]["greeting"]["prompt_version"] = prompt_version
+        invalid["deployments"]["greeting"]["prompt_pins"]["default"] = prompt_version
         invalid_snapshot = UseCaseDocument.from_mapping(invalid)
         with pytest.raises(UnknownPromptError):
             resolve(invalid_snapshot, "greeting")
 
     missing_version = readable_document(snapshot_document)
-    missing_version["deployments"]["greeting"]["prompt_version"] = 99
+    missing_version["deployments"]["greeting"]["prompt_pins"]["default"] = 99
     with pytest.raises(UnresolvedError):
         resolve(UseCaseDocument.from_mapping(missing_version), "greeting")
 
@@ -216,6 +216,32 @@ def test_schema1_invalid_pins_and_missing_references_fail_closed(snapshot_docume
     missing_model["deployments"]["greeting"]["model"] = "missing/model"
     with pytest.raises(UnresolvedError):
         resolve(UseCaseDocument.from_mapping(missing_model), "greeting")
+
+
+def test_schema1_relabels_do_not_make_old_uuid_resources_resolvable(snapshot_document):
+    document = readable_document(snapshot_document)
+    document["deployments"]["greeting"] = {
+        "revision": "v2026.09.30-1",
+        "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+        "template_pins": {"default": "0198f2a1-0000-7000-8000-00000000a001"},
+        "api": "chat_completions",
+        "request_path": "/api/v1/chat/completions",
+    }
+    document["prompt_versions"]["0198f2a1-0000-7000-8000-00000000a001"] = {
+        "id": "0198f2a1-0000-7000-8000-00000000a001",
+        "prompt_template_id": "0198f2a1-0000-7000-8000-00000000b001",
+        "number": 1,
+        "kind": "chat",
+        "engine": "liquid",
+        "messages": [{"role": "user", "content": "Hi"}],
+    }
+    document["models"]["0198f2a1-0000-7000-8000-00000000e001"] = {
+        "id": "0198f2a1-0000-7000-8000-00000000e001",
+        "provider": "openrouter",
+        "model_id": "openai/gpt-4o-mini",
+    }
+    with pytest.raises((UnresolvedError, UnknownPromptError)):
+        resolve(UseCaseDocument.from_mapping(document), "greeting")
 
 
 def test_schema1_composite_keys_must_match_embedded_fields(snapshot_document):

@@ -135,6 +135,10 @@ class UseCase:
         self._commit(resolution)
         return messages
 
+    @property
+    def decision(self) -> dict[str, Any] | None:
+        return self._resolution.decision
+
     def text(self, variables: Mapping[str, Any] | None = None, *, prompt: str | None = None) -> str:
         """Render this use case as a text prompt."""
         resolution = self._selected(prompt)
