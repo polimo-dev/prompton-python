@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1
+
+- Accept schema v9 single-prompt responses from `GET /api/v1/prompts/:key`, validating the flat `prompt`, `deployment`, `prompt_version` and `model` resources before normalizing them for existing local rendering.
+- Keep schema v9 response bytes unchanged in per-prompt disk caches and exported bundles so ETags stay tied to the original server body.
+
 ## 0.7.0
 
 - Added schema v8 prompt document support. New remote, disk and bundle documents use readable

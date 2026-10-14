@@ -16,7 +16,7 @@ from prompton.snapshot_data import UseCaseDocument
 from prompton.store import SnapshotStore
 from prompton.testing import make_use_case_document
 
-from .conftest import FakeTransport, json_response, transport_error
+from .conftest import FakeTransport, json_response, single_prompt_document, transport_error
 
 ETAG = '"sha256-abc"'
 
@@ -474,6 +474,28 @@ class TestServerDown:
         store.refresh(raise_errors=False, key="greeting")
         assert store.current("greeting").data.project == "demo"
         assert store.info()["stale"] is True
+
+    def test_schema9_single_prompt_response_is_cached_exported_and_reloaded_raw(self, tmp_path):
+        raw = json.dumps(single_prompt_document("greeting")).encode("utf-8")
+        transport = FakeTransport()
+        transport.push(HttpResponse(status=200, body=raw, headers={"etag": '"sha256-v9"'}))
+        store = build(tmp_path, transport, project="sdkfixture")
+        store.start()
+        entry = store.current("greeting")
+        assert entry.data.schema_version == 9
+        assert entry.raw == raw
+
+        prompt_path = tmp_path / "snapshot.json.prompts" / "greeting.json"
+        assert prompt_path.read_bytes() == raw
+
+        offline = FakeTransport()
+        offline.push(transport_error())
+        second = build(tmp_path, offline, project="sdkfixture")
+        second.start()
+        assert second.current("greeting").source == "disk"
+
+        exported = store.export(tmp_path / "bundle" / "snapshot.json")
+        assert exported.read_bytes() == raw
 
     def test_a_cold_start_reads_the_disk_cache_written_by_an_earlier_run(self, tmp_path, document):
         transport = FakeTransport()

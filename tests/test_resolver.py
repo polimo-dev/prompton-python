@@ -11,7 +11,7 @@ from prompton.snapshot_data import (
     UseCaseDocument,
 )
 from prompton.testing import make_use_case_document
-from tests.conftest import readable_document
+from tests.conftest import readable_document, single_prompt_document
 
 
 @pytest.fixture
@@ -98,6 +98,54 @@ def test_schema8_readable_resources_have_no_public_resource_ids(snapshot_documen
     assert resolution.prompt_version == {"id": None, "number": 1}
     assert resolution.messages is not None
     assert resolution.messages[1]["content"] == "Say hello to {{ name }}."
+
+
+def test_schema9_single_prompt_chat_and_decision_documents():
+    greeting = UseCaseDocument.from_mapping(single_prompt_document("greeting"))
+    resolution = resolve(greeting, "greeting")
+    assert resolution.deployment == {"id": None, "revision": "v2026.09.30-1"}
+    assert resolution.model_id is None
+    assert resolution.model == "openai/gpt-4o-mini"
+    assert resolution.provider == "openrouter"
+    assert resolution.prompt_version == {"id": None, "number": 1}
+    assert resolution.messages is not None
+    assert resolution.messages[1]["content"] == "Say hello to {{ name }}."
+
+    sentiment = UseCaseDocument.from_mapping(single_prompt_document("sentiment"))
+    decision = resolve(sentiment, "sentiment")
+    assert decision.kind == "decision"
+    assert decision.model == "typesafe/jev-1.13"
+    assert decision.request_path == "/api/v1/systemone"
+
+
+def test_schema9_rejects_incomplete_mixed_or_mismatched_single_prompt_documents():
+    missing = single_prompt_document("greeting")
+    missing.pop("prompt_version")
+    with pytest.raises(InvalidUseCaseDocumentError, match="prompt_version is required"):
+        UseCaseDocument.from_mapping(missing)
+
+    mixed = single_prompt_document("greeting", prompts={})
+    with pytest.raises(InvalidUseCaseDocumentError, match="singular resources"):
+        UseCaseDocument.from_mapping(mixed)
+
+    mixed_null = single_prompt_document("greeting", prompts=None)
+    with pytest.raises(InvalidUseCaseDocumentError, match="singular resources"):
+        UseCaseDocument.from_mapping(mixed_null)
+
+    bad_version_prompt = single_prompt_document("greeting")
+    bad_version_prompt["prompt_version"]["prompt"] = "review"
+    with pytest.raises(InvalidUseCaseDocumentError, match=r"prompt_version\.prompt"):
+        UseCaseDocument.from_mapping(bad_version_prompt)
+
+    bad_deployment_version = single_prompt_document("greeting")
+    bad_deployment_version["deployment"]["prompt_version"] = 99
+    with pytest.raises(InvalidUseCaseDocumentError, match=r"deployment\.prompt_version"):
+        UseCaseDocument.from_mapping(bad_deployment_version)
+
+    bad_model = single_prompt_document("greeting")
+    bad_model["deployment"]["model"] = "different/model"
+    with pytest.raises(InvalidUseCaseDocumentError, match="provider/model"):
+        UseCaseDocument.from_mapping(bad_model)
 
 
 def test_schema8_scopes_prompt_versions_by_prompt_and_models_by_provider(snapshot_document):
@@ -211,7 +259,7 @@ class TestSnapshotDecoding:
 
     def test_newer_schema_versions_are_refused(self):
         document = make_use_case_document(greeting={"messages": []})
-        document["schema_version"] = SCHEMA_VERSION + 1
+        document["schema_version"] = SCHEMA_VERSION + 2
         document["use_cases"]["greeting"]["brand_new_field"] = 1
         with pytest.raises(UnsupportedSchemaVersionError):
             UseCaseDocument.from_mapping(document)

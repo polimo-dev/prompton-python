@@ -20,10 +20,10 @@ use_case.track(...)                  ──▶  your provider call, timed and lo
 
 ## Install
 
-Install the v0.7.0 GitHub source release:
+Install the v0.7.1 GitHub source release:
 
 ```sh
-pip install "prompton-sdk @ git+https://github.com/polimo-dev/prompton-python.git@v0.7.0"
+pip install "prompton-sdk @ git+https://github.com/polimo-dev/prompton-python.git@v0.7.1"
 ```
 
 Python 3.10 or newer. **No runtime dependencies** - it uses `urllib` from the standard library.
@@ -168,7 +168,7 @@ or a background job that does not wrap the provider call.
 | `usage` | `input_tokens`, `output_tokens`, `cost_usd`, `cost_source`, `raw` |
 | `latency_ms`, `trace_id`, `sequence`, `end_user_ref` | Correlation |
 | `context`, `metadata` | Free-form. Keep them small: over 2 KB and 4 KB the server rejects the record |
-| `sdk` | `{"name": "prompton-python", "version": "0.7.0"}` |
+| `sdk` | `{"name": "prompton-python", "version": "0.7.1"}` |
 
 Before sending, the SDK applies the use case's payload policy: sampling (deterministic on the id,
 with errors and truncated answers always kept), `hash` or `none` modes, and truncation to the

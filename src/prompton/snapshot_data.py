@@ -3,7 +3,7 @@
 A deployment revision is a **pin, not a router**: one model plus one pinned prompt version per
 prompt name. Older documents - a stale disk cache, an old bundle - are refused, and the SDK
 keeps polling for a v4 one. Newer and legacy schema shapes are refused too: this SDK reads exactly
-schema v4/v5/v6/v7/v8.
+schema v4/v5/v6/v7/v8/v9.
 """
 
 from __future__ import annotations
@@ -45,9 +45,7 @@ class UnsupportedSchemaVersionError(InvalidUseCaseDocumentError):
     """The document announces a schema version this SDK does not read."""
 
     def __init__(self, version: int) -> None:
-        super().__init__(
-            f"unsupported schema_version {version}; this SDK reads v4-v{SCHEMA_VERSION}"
-        )
+        super().__init__(f"unsupported schema_version {version}; this SDK reads v4-v9")
         self.version = version
 
 
@@ -180,7 +178,9 @@ class UseCaseDocument:
         warnings: list[str] = []
         version = _schema_version(document)
 
-        raw_use_cases = document.get("use_cases") or document.get("prompts")
+        normalized = _normalize_single_prompt_document(document) if version == 9 else document
+
+        raw_use_cases = normalized.get("use_cases") or normalized.get("prompts")
         if not isinstance(raw_use_cases, Mapping):
             raise InvalidUseCaseDocumentError("use_cases/prompts is required and must be an object")
 
@@ -189,16 +189,16 @@ class UseCaseDocument:
             for key, value in raw_use_cases.items()
             if isinstance(value, Mapping)
         }
-        deployments = _decode_deployments(document.get("deployments"), version, warnings)
+        deployments = _decode_deployments(normalized.get("deployments"), version, warnings)
         prompt_versions = _decode_prompt_versions(
-            document.get("prompt_versions"), version, warnings
+            normalized.get("prompt_versions"), version, warnings
         )
-        models = _decode_models(document.get("models"), version, warnings)
+        models = _decode_models(normalized.get("models"), version, warnings)
 
         return cls(
             schema_version=version,
-            project=_as_str(document.get("project")),
-            environment=_as_str(document.get("environment")),
+            project=_as_str(normalized.get("project")),
+            environment=_as_str(normalized.get("environment")),
             use_cases=use_cases,
             deployments=deployments,
             prompt_versions=prompt_versions,
@@ -210,6 +210,60 @@ class UseCaseDocument:
 # ---------------------------------------------------------------------------
 
 
+def _normalize_single_prompt_document(document: Mapping[str, Any]) -> dict[str, Any]:
+    for plural in ("prompts", "deployments", "prompt_versions", "models"):
+        if plural in document:
+            raise InvalidUseCaseDocumentError(
+                f"schema_version 9 prompt document must use singular resources; found {plural}"
+            )
+    prompt = document.get("prompt")
+    deployment = document.get("deployment")
+    version = document.get("prompt_version")
+    model = document.get("model")
+    if not isinstance(prompt, Mapping):
+        raise InvalidUseCaseDocumentError("schema v9 prompt document prompt is required")
+    if not isinstance(deployment, Mapping):
+        raise InvalidUseCaseDocumentError("schema v9 prompt document deployment is required")
+    if not isinstance(version, Mapping):
+        raise InvalidUseCaseDocumentError("schema v9 prompt document prompt_version is required")
+    if not isinstance(model, Mapping):
+        raise InvalidUseCaseDocumentError("schema v9 prompt document model is required")
+
+    key = _strict_str(prompt.get("key"))
+    if key is None or key.strip() == "":
+        raise InvalidUseCaseDocumentError("schema v9 prompt.key is required")
+    version_prompt = _strict_str(version.get("prompt"))
+    if version_prompt != key:
+        raise InvalidUseCaseDocumentError("schema v9 prompt_version.prompt must match prompt.key")
+    number = _strict_positive_int(version.get("number"))
+    if number is None:
+        raise InvalidUseCaseDocumentError(
+            "schema v9 prompt_version.number must be a positive integer"
+        )
+    if deployment.get("prompt_version") != number:
+        raise InvalidUseCaseDocumentError(
+            "schema v9 deployment.prompt_version must match prompt_version.number"
+        )
+    provider = _strict_str(model.get("provider"))
+    model_name = _strict_str(model.get("model"))
+    if provider is None or model_name is None:
+        raise InvalidUseCaseDocumentError("schema v9 model provider and model are required")
+    if deployment.get("provider") != provider or deployment.get("model") != model_name:
+        raise InvalidUseCaseDocumentError("schema v9 deployment provider/model must match model")
+
+    prompt_body = dict(prompt)
+    prompt_body.pop("key", None)
+    return {
+        "schema_version": 9,
+        "project": document.get("project"),
+        "environment": document.get("environment"),
+        "prompts": {key: prompt_body},
+        "deployments": {key: deployment},
+        "prompt_versions": {f"{key}@{number}": version},
+        "models": {f"{provider}:{model_name}": model},
+    }
+
+
 def _schema_version(document: Mapping[str, Any]) -> int:
     raw = document.get("schema_version")
     if raw is None:
@@ -218,7 +272,7 @@ def _schema_version(document: Mapping[str, Any]) -> int:
         raise InvalidUseCaseDocumentError(
             f"schema_version must be integer {SCHEMA_VERSION}, got {raw!r}"
         )
-    if raw in (4, 5, 6, 7, 8):
+    if raw in (4, 5, 6, 7, 8, 9):
         return raw
     raise UnsupportedSchemaVersionError(raw)
 

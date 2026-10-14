@@ -32,6 +32,57 @@ def load_conformance(name: str) -> dict[str, Any]:
     return json.loads((CONFORMANCE / f"{name}.json").read_text(encoding="utf-8"))
 
 
+def single_prompt_document(
+    key: str = "greeting", environment: str = "production", **overrides: Any
+) -> dict[str, Any]:
+    """Convert the readable schema v8 fixture into the schema v9 single-prompt shape."""
+    readable = readable_document(
+        make_use_case_document(
+            project="sdkfixture",
+            environment=environment,
+            greeting={
+                "messages": [
+                    {"role": "system", "content": "You are a friendly greeter."},
+                    {"role": "user", "content": "Say hello to {{ name }}."},
+                ],
+                "provider_options": {"only": ["OpenAI"]},
+            },
+            sentiment={
+                "kind": "decision",
+                "model": "typesafe/jev-1.13",
+                "messages": [],
+            },
+        )
+    )
+    prompt = readable["prompts"].get(key)
+    deployment = readable["deployments"].get(key)
+    if prompt is None or deployment is None:
+        raise KeyError(key)
+    version = readable["prompt_versions"].get(f"{key}@{deployment['prompt_version']}")
+    model = readable["models"].get(f"{deployment['provider']}:{deployment['model']}")
+    if version is None or model is None:
+        raise KeyError(key)
+    if key == "sentiment":
+        deployment = {**deployment, "api": "decisions", "request_path": "/api/v1/systemone"}
+    elif key == "greeting":
+        deployment = {
+            **deployment,
+            "api": "chat_completions",
+            "request_path": "/api/v1/chat/completions",
+        }
+    document = {
+        "schema_version": 9,
+        "project": readable["project"],
+        "environment": environment,
+        "prompt": {"key": key, **prompt},
+        "deployment": deployment,
+        "prompt_version": version,
+        "model": model,
+    }
+    document.update(overrides)
+    return document
+
+
 class FakeTransport:
     """A scripted transport: hand it responses, read back the requests it received."""
 
