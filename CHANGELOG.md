@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0
+
+- Added schema v8 prompt document support. New remote, disk and bundle documents use readable
+  resource references: deployments pin `provider`, `model` and `prompt_version`; prompt versions
+  are keyed by `prompt@number`; models are keyed by `provider:model`.
+- Public resource id accessors such as `deployment["id"]`, `prompt_version["id"]` and `model_id`
+  are `None` for schema v8 documents, while readable evidence (`deployment_revision`, `provider`,
+  `model`, `prompt_version_number`) remains available for rendering and logs.
+- Legacy schema v4-v7 disk caches and bundles remain readable.
+
 ## 0.6.0
 
 - Monitoring logs now send readable prompt evidence: `prompt_key`, `deployment_revision`,

@@ -20,10 +20,10 @@ use_case.track(...)                  ──▶  your provider call, timed and lo
 
 ## Install
 
-Install the v0.6.0 GitHub source release:
+Install the v0.7.0 GitHub source release:
 
 ```sh
-pip install "prompton-sdk @ git+https://github.com/polimo-dev/prompton-python.git@v0.6.0"
+pip install "prompton-sdk @ git+https://github.com/polimo-dev/prompton-python.git@v0.7.0"
 ```
 
 Python 3.10 or newer. **No runtime dependencies** - it uses `urllib` from the standard library.
@@ -156,6 +156,7 @@ or a background job that does not wrap the provider call.
 | `use_case`, `model`, `status`, `started_at` | Required. `status` is `ok` or `error` |
 | `kind` | `chat`, `text` or `embedding` |
 | `deployment_revision`, `prompt`, `prompt_version_number` | Readable prompt evidence. `deployment_revision` is a string like `v2026.09.30-1`; `prompt_version_number` is present when the prompt has a pinned version |
+| `model_id`, `deployment.id`, `prompt_version.id` | Legacy resource ids. They are `None` for schema v8 documents because v8 uses readable references instead of public resource UUIDs |
 | `provider`, `model_used`, `upstream_provider` | Who actually served it |
 | Compatibility | Log requests no longer include retired resource UUID refs (`deployment_id`, `prompt_version_id`, `model_id`). Older released SDKs that still emit them need the matching server rollout before they can post logs to the new request contract |
 | `source` | `remote`, `disk`, `bundle` or `manual` |
@@ -167,7 +168,7 @@ or a background job that does not wrap the provider call.
 | `usage` | `input_tokens`, `output_tokens`, `cost_usd`, `cost_source`, `raw` |
 | `latency_ms`, `trace_id`, `sequence`, `end_user_ref` | Correlation |
 | `context`, `metadata` | Free-form. Keep them small: over 2 KB and 4 KB the server rejects the record |
-| `sdk` | `{"name": "prompton-python", "version": "0.6.0"}` |
+| `sdk` | `{"name": "prompton-python", "version": "0.7.0"}` |
 
 Before sending, the SDK applies the use case's payload policy: sampling (deterministic on the id,
 with errors and truncated answers always kept), `hash` or `none` modes, and truncation to the

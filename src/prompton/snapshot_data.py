@@ -1,9 +1,9 @@
-"""Decoding ``GET /prompts`` (schema v4/v5/v6/v7) into the structures the resolver reads.
+"""Decoding ``GET /prompts`` (schema v4/v5/v6/v7/v8) into the structures the resolver reads.
 
 A deployment revision is a **pin, not a router**: one model plus one pinned prompt version per
 prompt name. Older documents - a stale disk cache, an old bundle - are refused, and the SDK
 keeps polling for a v4 one. Newer and legacy schema shapes are refused too: this SDK reads exactly
-schema v4/v5/v6/v7.
+schema v4/v5/v6/v7/v8.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ __all__ = [
     "UseCaseDocument",
 ]
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _KINDS = ("chat", "decision", "text", "embedding")
 _ENGINES = ("liquid", "raw")
@@ -113,7 +113,8 @@ class UseCase:
 class PromptVersion:
     """An immutable prompt version: chat messages or a single text template."""
 
-    id: str
+    id: str | None
+    lookup_key: str | None = None
     prompt_id: str | None = None
     number: int | None = None
     engine: str = "liquid"
@@ -128,7 +129,8 @@ class PromptVersion:
 class Model:
     """A catalog model. ``model_id`` is the provider-side string your app sends to the provider."""
 
-    id: str
+    id: str | None
+    lookup_key: str | None = None
     provider: str | None = None
     model_id: str | None = None
     display_name: str | None = None
@@ -187,9 +189,11 @@ class UseCaseDocument:
             for key, value in raw_use_cases.items()
             if isinstance(value, Mapping)
         }
-        deployments = _decode_deployments(document.get("deployments"), warnings)
-        prompt_versions = _decode_prompt_versions(document.get("prompt_versions"), warnings)
-        models = _decode_models(document.get("models"), warnings)
+        deployments = _decode_deployments(document.get("deployments"), version, warnings)
+        prompt_versions = _decode_prompt_versions(
+            document.get("prompt_versions"), version, warnings
+        )
+        models = _decode_models(document.get("models"), version, warnings)
 
         return cls(
             schema_version=version,
@@ -214,7 +218,7 @@ def _schema_version(document: Mapping[str, Any]) -> int:
         raise InvalidUseCaseDocumentError(
             f"schema_version must be integer {SCHEMA_VERSION}, got {raw!r}"
         )
-    if raw in (4, 5, 6, 7):
+    if raw in (4, 5, 6, 7, 8):
         return raw
     raise UnsupportedSchemaVersionError(raw)
 
@@ -252,6 +256,19 @@ def _as_int(value: Any, default: int | None = None) -> int | None:
         except ValueError:
             return default
     return default
+
+
+def _as_positive_int(value: Any) -> int | None:
+    parsed = _as_int(value)
+    return parsed if parsed is not None and parsed > 0 else None
+
+
+def _model_key(provider: Any, model: Any) -> str | None:
+    provider_text = _as_str(provider)
+    model_text = _as_str(model)
+    if provider_text is None or model_text is None:
+        return None
+    return f"{provider_text}:{model_text}"
 
 
 def _enum(value: Any, allowed: tuple[str, ...], default: str, tag: str, warnings: list[str]) -> str:
@@ -317,7 +334,9 @@ def _decode_payload_policy(raw: Any, warnings: list[str]) -> PayloadPolicy | Non
     )
 
 
-def _decode_deployments(raw: Any, warnings: list[str]) -> dict[str, Deployment]:
+def _decode_deployments(
+    raw: Any, schema_version: int, warnings: list[str]
+) -> dict[str, Deployment]:
     if raw is None:
         return {}
     if not isinstance(raw, Mapping):
@@ -329,23 +348,34 @@ def _decode_deployments(raw: Any, warnings: list[str]) -> dict[str, Deployment]:
             warnings.append(f"invalid_deployment: {key}")
             continue
         pins: dict[str, str] = {}
-        raw_pins = value.get("prompt_pins") or value.get("template_pins")
-        if isinstance(raw_pins, Mapping):
-            for name, version_id in raw_pins.items():
-                name_str, id_str = _as_str(name), _as_str(version_id)
-                if name_str and id_str:
-                    pins[name_str] = id_str
-                else:
-                    warnings.append(f"invalid_prompt_pin: {key}/{name}")
-        elif raw_pins is not None:
-            warnings.append(f"invalid_prompt_pins: {key}")
+        if schema_version >= 8:
+            number = _as_positive_int(value.get("prompt_version"))
+            if number is not None:
+                pins["default"] = f"{key}@{number}"
+            elif value.get("prompt_version") is not None:
+                warnings.append(f"invalid_prompt_pin: {key}/default")
+        else:
+            raw_pins = value.get("prompt_pins") or value.get("template_pins")
+            if isinstance(raw_pins, Mapping):
+                for name, version_id in raw_pins.items():
+                    name_str, id_str = _as_str(name), _as_str(version_id)
+                    if name_str and id_str:
+                        pins[name_str] = id_str
+                    else:
+                        warnings.append(f"invalid_prompt_pin: {key}/{name}")
+            elif raw_pins is not None:
+                warnings.append(f"invalid_prompt_pins: {key}")
         deployments[str(key)] = Deployment(
-            id=_as_str(value.get("id")),
+            id=None if schema_version >= 8 else _as_str(value.get("id")),
             use_case_key=(
                 _as_str(value.get("use_case_key")) or _as_str(value.get("prompt_key")) or str(key)
             ),
             revision=_as_revision(value.get("revision"), str(key)),
-            model_id=_as_str(value.get("model_id")),
+            model_id=(
+                _model_key(value.get("provider"), value.get("model"))
+                if schema_version >= 8
+                else _as_str(value.get("model_id"))
+            ),
             params=stringify_keys(value.get("params")),
             provider_options=stringify_keys(value.get("provider_options")),
             prompt_pins=pins,
@@ -355,14 +385,28 @@ def _decode_deployments(raw: Any, warnings: list[str]) -> dict[str, Deployment]:
     return deployments
 
 
-def _decode_prompt_versions(raw: Any, warnings: list[str]) -> dict[str, PromptVersion]:
+def _decode_prompt_versions(
+    raw: Any, schema_version: int, warnings: list[str]
+) -> dict[str, PromptVersion]:
     versions: dict[str, PromptVersion] = {}
     for entry_id, entry in _iter_by_id(raw, warnings):
         messages = _decode_messages(entry.get("messages"), warnings)
-        versions[entry_id] = PromptVersion(
-            id=entry_id,
-            prompt_id=_as_str(entry.get("prompt_id")) or _as_str(entry.get("prompt_template_id")),
-            number=_as_int(entry.get("number")),
+        prompt_key = _as_str(entry.get("prompt"))
+        number = _as_int(entry.get("number"))
+        lookup_key = (
+            f"{prompt_key}@{number}" if schema_version >= 8 and prompt_key and number else entry_id
+        )
+        if schema_version >= 8 and (not prompt_key or number is None or number <= 0):
+            warnings.append(f"invalid_prompt_version: {entry_id}")
+        versions[lookup_key] = PromptVersion(
+            id=None if schema_version >= 8 else entry_id,
+            lookup_key=lookup_key,
+            prompt_id=(
+                prompt_key
+                if schema_version >= 8
+                else (_as_str(entry.get("prompt_id")) or _as_str(entry.get("prompt_template_id")))
+            ),
+            number=number,
             engine=_enum(entry.get("engine"), _ENGINES, "liquid", "unknown_engine", warnings),
             messages=messages,
             text_template=_as_str(entry.get("text_template")),
@@ -410,16 +454,26 @@ def _decode_tools(raw: Any, warnings: list[str]) -> dict[str, Any] | None:
     return tools
 
 
-def _decode_models(raw: Any, warnings: list[str]) -> dict[str, Model]:
+def _decode_models(raw: Any, schema_version: int, warnings: list[str]) -> dict[str, Model]:
     models: dict[str, Model] = {}
     for entry_id, entry in _iter_by_id(raw, warnings):
         capabilities = entry.get("capabilities")
         if not isinstance(capabilities, list):
             capabilities = [] if capabilities is None else [capabilities]
-        models[entry_id] = Model(
-            id=entry_id,
-            provider=_as_str(entry.get("provider")),
-            model_id=_as_str(entry.get("model_id")),
+        provider = _as_str(entry.get("provider"))
+        model = (
+            _as_str(entry.get("model"))
+            if schema_version >= 8
+            else _as_str(entry.get("model_id"))
+        )
+        lookup_key = (
+            f"{provider}:{model}" if schema_version >= 8 and provider and model else entry_id
+        )
+        models[lookup_key] = Model(
+            id=None if schema_version >= 8 else entry_id,
+            lookup_key=lookup_key,
+            provider=provider,
+            model_id=model,
             display_name=_as_str(entry.get("display_name")),
             metadata=stringify_keys(entry.get("metadata")),
             provider_options=stringify_keys(entry.get("provider_options")),

@@ -121,3 +121,73 @@ def snapshot_document() -> dict[str, Any]:
 @pytest.fixture
 def snapshot_bytes(snapshot_document: dict[str, Any]) -> bytes:
     return json.dumps(snapshot_document).encode("utf-8")
+
+
+def readable_document(document: dict[str, Any]) -> dict[str, Any]:
+    """Convert the test document into the schema v8 readable-resource wire shape."""
+    legacy = json.loads(json.dumps(document))
+    models_by_id = legacy["models"]
+    versions_by_id = legacy["prompt_versions"]
+    deployments: dict[str, Any] = {}
+    prompt_versions: dict[str, Any] = {}
+    models: dict[str, Any] = {}
+
+    for key, deployment in legacy["deployments"].items():
+        model = models_by_id[deployment["model_id"]]
+        provider = model["provider"]
+        model_name = model["model_id"]
+        pins = deployment.get("prompt_pins") or deployment.get("template_pins") or {}
+        version = versions_by_id.get(pins.get("default"))
+        deployments[key] = {
+            "revision": deployment["revision"],
+            "provider": provider,
+            "model": model_name,
+            "prompt_version": version["number"] if version else None,
+            "params": deployment["params"],
+            "provider_options": deployment["provider_options"],
+            "api": deployment.get("api"),
+            "request_path": deployment.get("request_path"),
+        }
+        if version:
+            number = version["number"]
+            prompt_versions[f"{key}@{number}"] = {
+                "prompt": key,
+                "number": number,
+                "kind": version.get("kind") or legacy["use_cases"][key]["kind"],
+                "engine": version["engine"],
+                "messages": version["messages"],
+                "text_template": version["text_template"],
+                "decision": version.get("decision"),
+                "tools": version.get("tools"),
+            }
+
+    for model in models_by_id.values():
+        provider = model["provider"]
+        model_name = model["model_id"]
+        models[f"{provider}:{model_name}"] = {
+            "provider": provider,
+            "model": model_name,
+            "display_name": model["display_name"],
+            "metadata": model["metadata"],
+            "provider_options": model["provider_options"],
+            "capabilities": model["capabilities"],
+            "status": model["status"],
+        }
+
+    return {
+        "schema_version": 8,
+        "project": legacy["project"],
+        "environment": legacy["environment"],
+        "prompts": {
+            key: {
+                "kind": use_case["kind"],
+                "input_schema": use_case["input_schema"],
+                "default_params": use_case["default_params"],
+                "payload_policy": use_case["payload_policy"],
+            }
+            for key, use_case in legacy["use_cases"].items()
+        },
+        "deployments": deployments,
+        "prompt_versions": prompt_versions,
+        "models": models,
+    }

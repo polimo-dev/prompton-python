@@ -112,7 +112,10 @@ class UseCase:
 
     @property
     def prompt_version(self) -> dict[str, Any] | None:
-        if self._resolution.prompt_version_id is None:
+        if (
+            self._resolution.prompt_version_id is None
+            and self._resolution.prompt_version_number is None
+        ):
             return None
         return {
             "id": self._resolution.prompt_version_id,

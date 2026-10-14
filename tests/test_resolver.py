@@ -11,6 +11,7 @@ from prompton.snapshot_data import (
     UseCaseDocument,
 )
 from prompton.testing import make_use_case_document
+from tests.conftest import readable_document
 
 
 @pytest.fixture
@@ -84,6 +85,80 @@ def test_a_dangling_reference_resolves_with_warnings_rather_than_failing(snapsho
     assert resolution.warnings == (
         "missing_prompt_version: also-gone",
         "missing_model: gone",
+    )
+
+
+def test_schema8_readable_resources_have_no_public_resource_ids(snapshot_document):
+    snapshot = UseCaseDocument.from_mapping(readable_document(snapshot_document))
+    resolution = resolve(snapshot, "greeting")
+    assert resolution.deployment == {"id": None, "revision": "v2026.09.30-1"}
+    assert resolution.model_id is None
+    assert resolution.model == "openai/gpt-4o-mini"
+    assert resolution.provider == "openrouter"
+    assert resolution.prompt_version == {"id": None, "number": 1}
+    assert resolution.messages is not None
+    assert resolution.messages[1]["content"] == "Say hello to {{ name }}."
+
+
+def test_schema8_scopes_prompt_versions_by_prompt_and_models_by_provider(snapshot_document):
+    document = readable_document(snapshot_document)
+    document["prompts"]["review"] = {
+        "kind": "chat",
+        "input_schema": [],
+        "default_params": {},
+        "payload_policy": None,
+    }
+    document["deployments"]["review"] = {
+        "revision": "v2026.09.30-7",
+        "provider": "direct",
+        "model": "openai/gpt-4o-mini",
+        "prompt_version": 1,
+        "params": {},
+        "provider_options": {},
+        "api": "chat_completions",
+        "request_path": "/v1/chat/completions",
+    }
+    document["prompt_versions"]["review@1"] = {
+        "prompt": "review",
+        "number": 1,
+        "kind": "chat",
+        "engine": "liquid",
+        "messages": [{"role": "user", "content": "Review {{ item }}."}],
+        "text_template": None,
+    }
+    document["models"]["direct:openai/gpt-4o-mini"] = {
+        "provider": "direct",
+        "model": "openai/gpt-4o-mini",
+        "display_name": "Direct GPT-4o mini",
+        "metadata": {},
+        "provider_options": {"base_url": "https://api.openai.example"},
+        "capabilities": [],
+        "status": "active",
+    }
+    snapshot = UseCaseDocument.from_mapping(document)
+    assert resolve(snapshot, "greeting").provider_options == {"only": ["OpenAI"]}
+    review = resolve(snapshot, "review")
+    assert review.provider == "direct"
+    assert review.provider_options == {"base_url": "https://api.openai.example"}
+    assert review.messages == ({"role": "user", "content": "Review {{ item }}."},)
+
+
+def test_schema8_invalid_pins_and_missing_references_are_reported(snapshot_document):
+    invalid = readable_document(snapshot_document)
+    invalid["deployments"]["greeting"]["prompt_version"] = "latest"
+    invalid_snapshot = UseCaseDocument.from_mapping(invalid)
+    with pytest.raises(UnknownPromptError):
+        resolve(invalid_snapshot, "greeting")
+
+    missing = readable_document(snapshot_document)
+    missing["deployments"]["greeting"]["prompt_version"] = 99
+    missing["deployments"]["greeting"]["model"] = "missing/model"
+    resolution = resolve(UseCaseDocument.from_mapping(missing), "greeting")
+    assert resolution.model is None
+    assert resolution.prompt_version is None
+    assert resolution.warnings == (
+        "missing_prompt_version: greeting@99",
+        "missing_model: openrouter:missing/model",
     )
 
 

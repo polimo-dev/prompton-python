@@ -18,8 +18,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .snapshot_data import SCHEMA_VERSION
-
 __all__ = ["make_use_case_document"]
 
 _DEFAULT_MODEL = "openai/gpt-4o-mini"
@@ -31,7 +29,7 @@ def make_use_case_document(
     environment: str = "production",
     **use_cases: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build a schema-v4 use-case document for the given use cases.
+    """Build a legacy schema-v7 use-case document for the given use cases.
 
     Each keyword is a use case key; its value describes the pin::
 
@@ -51,7 +49,7 @@ def make_use_case_document(
         )
     """
     document: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": 7,
         "project": project,
         "environment": environment,
         "use_cases": {},

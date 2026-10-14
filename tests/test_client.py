@@ -9,7 +9,7 @@ from prompton import PromptOn, ProviderError, Result
 from prompton.errors import MissingVariableError, NoTemplateError, UnknownUseCaseError
 from prompton.testing import make_use_case_document
 
-from .conftest import FakeTransport, json_response
+from .conftest import FakeTransport, json_response, readable_document
 
 
 @pytest.fixture
@@ -98,6 +98,27 @@ class TestWithGeneration:
         assert logged["context"] == {"plan": "pro"}
         assert logged["sdk"] == {"name": "prompton-python", "version": prompton.VERSION}
         assert isinstance(logged["latency_ms"], int)
+
+    def test_schema8_logs_readable_evidence_and_retains_event_ids(self, snapshot_document):
+        client = PromptOn(
+            mode="test", api_key=None, disk_cache=False, host="http://localhost:4000"
+        )
+        client.load_use_cases(readable_document(snapshot_document))
+        use_case = client.use_case("greeting")
+        assert use_case.model_id is None
+        assert use_case.prompt_version == {"id": None, "number": 1}
+        event_id = client.log({"id": "0198f2a1-0000-7000-8000-00000000ffff", "status": "ok"}, use_case=use_case)
+        assert event_id == "0198f2a1-0000-7000-8000-00000000ffff"
+        [logged] = client.captured
+        assert logged["id"] == event_id
+        assert logged["deployment_revision"] == "v2026.09.30-1"
+        assert logged["prompt_version_number"] == 1
+        assert logged["provider"] == "openrouter"
+        assert logged["model"] == "openai/gpt-4o-mini"
+        assert "deployment_id" not in logged
+        assert "prompt_version_id" not in logged
+        assert "model_id" not in logged
+        client.close(timeout=0.1)
 
     def test_named_prompt_render_updates_following_track_evidence(self, client):
         use_case = client.use_case("greeting")
