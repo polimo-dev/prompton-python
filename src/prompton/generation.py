@@ -151,11 +151,9 @@ def build_record(
     record: dict[str, Any] = {
         "id": meta.id or uuid7(),
         "prompt_key": resolution.use_case if resolution else None,
-        "deployment_id": resolution.deployment_id if resolution else None,
         "deployment_revision": resolution.deployment_revision if resolution else None,
         "template": resolution.prompt if resolution else None,
-        "prompt_version_id": resolution.prompt_version_id if resolution else None,
-        "model_id": resolution.model_id if resolution else None,
+        "prompt_version_number": resolution.prompt_version_number if resolution else None,
         "source": resolution.source if resolution else "manual",
         "context": stringify_keys(meta.context),
         "kind": resolution.kind if resolution else None,

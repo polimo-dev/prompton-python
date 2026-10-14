@@ -86,8 +86,10 @@ class TestWithGeneration:
         [logged] = client.captured
         assert logged["status"] == "ok"
         assert logged["stop_kind"] == "stop"
-        assert logged["deployment_id"] == use_case.deployment["id"]
-        assert logged["prompt_version_id"] == use_case.prompt_version["id"]
+        assert "deployment_id" not in logged
+        assert "prompt_version_id" not in logged
+        assert "model_id" not in logged
+        assert logged["prompt_version_number"] == use_case.prompt_version["number"]
         assert logged["source"] == "manual"
         assert logged["usage"]["cost_source"] == "provider"
         assert logged["input"]["variables"] == {"name": "Ada"}
@@ -107,7 +109,8 @@ class TestWithGeneration:
 
         [logged] = client.captured
         assert logged["template"] == "ko"
-        assert logged["prompt_version_id"] == use_case.prompt_version["id"]
+        assert logged["prompt_version_number"] == use_case.prompt_version["number"]
+        assert "prompt_version_id" not in logged
 
     def test_failed_named_prompt_render_does_not_poison_following_track_evidence(self, client):
         use_case = client.use_case("greeting")
@@ -119,7 +122,8 @@ class TestWithGeneration:
         [logged] = client.captured
         assert use_case.prompt == "default"
         assert logged["template"] == "default"
-        assert logged["prompt_version_id"] == use_case.prompt_version["id"]
+        assert logged["prompt_version_number"] == use_case.prompt_version["number"]
+        assert "prompt_version_id" not in logged
 
     def test_a_provider_error_is_logged_with_its_kind_and_then_re_raised(self, client):
         use_case = client.use_case("greeting")
@@ -209,7 +213,27 @@ class TestLog:
         assert logged["prompt_key"] == "greeting"
         assert logged["model"] == use_case.model
         assert logged["deployment_revision"] == use_case.deployment["revision"]
+        assert logged["prompt_version_number"] == use_case.prompt_version["number"]
         assert logged["source"] == "manual"
+        assert "deployment_id" not in logged
+        assert "prompt_version_id" not in logged
+        assert "model_id" not in logged
+
+    def test_hand_built_resource_uuid_fields_are_stripped(self, client):
+        client.log(
+            {
+                "prompt_key": "greeting",
+                "model": "openai/gpt-4o-mini",
+                "status": "ok",
+                "deployment_id": "0198f2a1-0000-7000-8000-00000000d001",
+                "prompt_version_id": "0198f2a1-0000-7000-8000-00000000a001",
+                "model_id": "0198f2a1-0000-7000-8000-00000000e001",
+            }
+        )
+        [logged] = client.captured
+        assert "deployment_id" not in logged
+        assert "prompt_version_id" not in logged
+        assert "model_id" not in logged
 
     def test_a_missing_required_field_is_a_bug_in_the_caller(self, client):
         with pytest.raises(ValueError, match="use_case"):

@@ -31,6 +31,7 @@ from ._json import canonical_json
 from .config import Config
 from .errors import TransportError
 from .http import Transport, build_headers, parse_api_error, retry_after_seconds, urlencode
+from .payload import sanitize_resource_fields
 
 __all__ = ["MAX_BATCH_BYTES", "MAX_BATCH_RECORDS", "BufferStats", "LogBuffer"]
 
@@ -166,6 +167,7 @@ class LogBuffer:
 
     def enqueue(self, record: dict[str, Any]) -> None:
         """Add one record. Returns immediately; failures are counted, never raised."""
+        record = sanitize_resource_fields(record)
         if not self._can_send:
             # offline, or no API key: no remote calls at all, so the record is dropped and counted
             self.stats.dropped_no_remote += 1
@@ -347,8 +349,9 @@ class LogBuffer:
                 self._idle.set()
 
     def _deliver(self, batch: _Batch) -> None:
+        records = [sanitize_resource_fields(record) for record in batch.records]
         if self._sender is not None:
-            self._sender(batch.records)
+            self._sender(records)
             self.stats.sent += len(batch.records)
             self.stats.accepted += len(batch.records)
             self.stats.batches_sent += 1
@@ -357,7 +360,7 @@ class LogBuffer:
 
         query = urlencode({"environment": self._config.environment})
         url = f"{self._config.base_url}/logs?{query}"
-        body = json.dumps({"logs": batch.records}, ensure_ascii=False).encode("utf-8")
+        body = json.dumps({"logs": records}, ensure_ascii=False).encode("utf-8")
         headers = build_headers(self._config.api_key, self._config.user_agent)
         headers["content-type"] = "application/json"
         try:

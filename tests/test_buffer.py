@@ -150,13 +150,22 @@ class TestRetries:
             lambda call: answers.pop(0) if answers else json_response(202, ACCEPTED)
         )
         buffer = started(transport)
-        item = record()
+        item = record(
+            deployment_id="0198f2a1-0000-7000-8000-00000000d001",
+            prompt_version_id="0198f2a1-0000-7000-8000-00000000a001",
+            model_id="0198f2a1-0000-7000-8000-00000000e001",
+        )
         buffer.enqueue(item)
         drain(buffer)
         assert len(transport.generation_requests) == 2
         first, second = transport.generation_requests
         assert first["body"] == second["body"]
         assert second["body"]["logs"][0]["id"] == item["id"]
+        for body in (first["body"], second["body"]):
+            sent = body["logs"][0]
+            assert "deployment_id" not in sent
+            assert "prompt_version_id" not in sent
+            assert "model_id" not in sent
 
     def test_a_5xx_is_retried_and_a_transport_failure_too(self, started):
         answers = [

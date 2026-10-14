@@ -25,7 +25,7 @@ from .config import Config
 from .errors import NoTemplateError, ProviderError
 from .generation import CallMeta, Result, build_record, iso_timestamp
 from .http import Transport, UrllibTransport, build_headers, parse_api_error, urlencode
-from .payload import apply_policy
+from .payload import apply_policy, sanitize_resource_fields
 from .resolver import Resolution
 from .resolver import prompt_names as _prompt_names
 from .resolver import resolve as _resolve
@@ -392,11 +392,9 @@ class PromptOn:
             item.setdefault("model", resolution.model)
             item.setdefault("source", resolution.source)
             for key, value in (
-                ("deployment_id", resolution.deployment_id),
                 ("deployment_revision", resolution.deployment_revision),
                 ("template", resolution.prompt),
-                ("prompt_version_id", resolution.prompt_version_id),
-                ("model_id", resolution.model_id),
+                ("prompt_version_number", resolution.prompt_version_number),
                 ("provider", resolution.provider),
             ):
                 if value is not None:
@@ -443,9 +441,9 @@ class PromptOn:
             return
         if self.config.mode == "test":
             with self._captured_lock:
-                self._captured.append(prepared)
+                self._captured.append(sanitize_resource_fields(prepared))
             return
-        self._buffer.enqueue(prepared)
+        self._buffer.enqueue(sanitize_resource_fields(prepared))
 
     def flush(self, timeout: float = 5.0) -> BufferStats:
         """Send everything queued now and wait for the result. Returns the buffer counters."""

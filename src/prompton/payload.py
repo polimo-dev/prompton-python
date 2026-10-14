@@ -37,13 +37,22 @@ from typing import Any
 
 from ._json import canonical_json, json_size, list_json_size, sha256_hex
 
-__all__ = ["DEFAULT_POLICY", "apply_policy", "bucket", "should_keep", "truncate_bytes"]
+__all__ = [
+    "DEFAULT_POLICY",
+    "RETIRED_RESOURCE_FIELDS",
+    "apply_policy",
+    "bucket",
+    "sanitize_resource_fields",
+    "should_keep",
+    "truncate_bytes",
+]
 
 log = logging.getLogger("prompton")
 
 ERROR_MESSAGE_MAX = 2048
 SAMPLE_SCALE = 10_000
 DEFAULT_MAX_BYTES = 262_144
+RETIRED_RESOURCE_FIELDS = frozenset(("deployment_id", "prompt_version_id", "model_id"))
 
 DEFAULT_POLICY: dict[str, Any] = {
     "mode": "full",
@@ -56,6 +65,11 @@ def bucket(record_id: Any) -> int:
     """``first 4 bytes of sha256(id)`` as an unsigned big-endian integer, mod 10000."""
     digest = hashlib.sha256(str(record_id or "").encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") % SAMPLE_SCALE
+
+
+def sanitize_resource_fields(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop retired public resource UUID references from a monitoring-log record."""
+    return {key: value for key, value in record.items() if key not in RETIRED_RESOURCE_FIELDS}
 
 
 def should_keep(record: Mapping[str, Any], sample_rate: float) -> bool:
