@@ -12,10 +12,10 @@ from prompton.snapshot_data import UseCaseDocument
 SLOT_ERROR = "Message slots are not supported; compose conversation history in app code."
 
 
-def test_schema7_tools_are_preserved_and_message_slots_are_rejected() -> None:
+def test_schema1_tools_are_preserved_and_message_slots_are_rejected() -> None:
     doc = UseCaseDocument.from_mapping(
         {
-            "schema_version": 7,
+            "schema_version": 1,
             "prompts": {"chat": {"kind": "chat", "default_params": {}}},
             "deployments": {
                 "chat": {

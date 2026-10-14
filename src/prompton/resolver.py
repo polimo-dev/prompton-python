@@ -57,10 +57,7 @@ class Resolution:
     api: str | None = None
     request_path: str | None = None
     tools: dict[str, Any] | None = None
-    api: str | None = None
-    request_path: str | None = None
-    tools: dict[str, Any] | None = None
-    input_schema: tuple[Any, ...] = ()
+    variables: tuple[Any, ...] = ()
     payload_policy: PayloadPolicy | None = None
     source: ResolutionSource = "remote"
     etag: str | None = None
@@ -124,17 +121,13 @@ def resolve(
     if version_id is not None:
         version = snapshot.prompt_versions.get(version_id)
         if version is None:
-            if snapshot.schema_version >= 8:
-                raise UnresolvedError(use_case)
-            warnings.append(f"missing_prompt_version: {version_id}")
+            raise UnresolvedError(use_case)
 
     model = None
     if deployment.model_id is not None:
         model = snapshot.models.get(deployment.model_id)
         if model is None:
-            if snapshot.schema_version >= 8:
-                raise UnresolvedError(use_case)
-            warnings.append(f"missing_model: {deployment.model_id}")
+            raise UnresolvedError(use_case)
 
     runtime_kind = version.kind or entry.kind if version else entry.kind
     messages = version.messages if (version and runtime_kind == "chat") else None
@@ -159,7 +152,7 @@ def resolve(
         messages=messages,
         text_template=text_template,
         available_prompts=available,
-        input_schema=entry.input_schema,
+        variables=entry.variables,
         payload_policy=entry.payload_policy,
         api=deployment.api,
         request_path=deployment.request_path,

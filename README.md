@@ -4,7 +4,7 @@ The official [PromptOn](https://app.prompton.ai) SDK for Python.
 
 PromptOn is the control plane for your app's LLM prompts. For each **use case** (one place in your
 code that calls an LLM) and each environment, it holds one **pin**: a prompt version, one model,
-and its parameters. Your app fetches a use-case document for those pins, renders the pinned prompt with this
+and its parameters. Your app fetches a prompt document for those pins, renders the pinned prompt with this
 call's variables, calls the provider **itself, with your own key and your own HTTP client**, and
 sends monitoring logs back in batches.
 
@@ -20,10 +20,10 @@ use_case.track(...)                  ──▶  your provider call, timed and lo
 
 ## Install
 
-Install the v0.7.1 GitHub source release:
+Install the v0.8.0 GitHub source release:
 
 ```sh
-pip install "prompton-sdk @ git+https://github.com/polimo-dev/prompton-python.git@v0.7.1"
+pip install "prompton-sdk @ git+https://github.com/polimo-dev/prompton-python.git@v0.8.0"
 ```
 
 Python 3.10 or newer. **No runtime dependencies** - it uses `urllib` from the standard library.
@@ -77,12 +77,12 @@ Precedence is always **explicit option > environment variable > default**.
 | `api_key` | `PTN_API_KEY` | — | `ptn_<project>_…`, one per project. Without it the SDK makes no remote calls and works from disk and bundle only, saying so once |
 | `host` | `PTN_HOST` | `https://app.prompton.ai` | The SDK appends `/api/v1` itself |
 | `environment` | `PTN_ENVIRONMENT` | `production` | Sent as `?environment=` and used as the disk/bundle guard |
-| `project` | `PTN_PROJECT` | parsed from the key | Names the disk cache file and guards against a foreign use-case document |
+| `project` | `PTN_PROJECT` | parsed from the key | Names the disk cache file and guards against a foreign prompt document |
 | `timeout` | `PTN_TIMEOUT` | `5.0` | Per-request timeout for non-config API calls. Config fetches are capped at 1 second |
 | `cache_ttl` | `PTN_CACHE_TTL` | `10.0` | Deprecated compatibility option. Normal config fetch freshness and attempt gating are fixed at 10 seconds per use-case key |
 | `poll` | `PTN_POLL` | `false` | Deprecated compatibility option. Normal runtime config fetches do not poll in the background |
 | `disk_cache` | `PTN_DISK_CACHE` | on | `True`, `False`, or a path. Default is `<os cache dir>/prompton/<project>-<environment>.json` |
-| `bundle` | `PTN_BUNDLE` | — | A use-case JSON shipped inside the app, used when memory and disk are empty |
+| `bundle` | `PTN_BUNDLE` | — | A prompt JSON shipped inside the app, used when memory and disk are empty |
 | `mode` | `PTN_MODE` | `live` | `test` (no HTTP, no disk cache or bundle, logs captured) or `offline` (disk and bundle only) |
 | `hash_end_user` | `PTN_HASH_END_USER` | `false` | Send `sha256(end_user_ref)` instead of the raw value |
 | `redact` | — | — | `fn(record) -> record`, applied last to every monitoring log |
@@ -107,7 +107,7 @@ client = PromptOn(
 
 ## Resilience: what happens when PromptOn is down
 
-The use-case document lives in three local tiers - **memory, one local file, a bundled file** - and
+The prompt document lives in three local tiers - **memory, one local file, a bundled file** - and
 nothing else. The SDK never requires or optionally integrates a database, Redis, or any other shared
 store. Several processes on one host may share the disk file: writes are atomic (tmp + rename),
 readers tolerate a concurrent rename, and a corrupt or partial file is ignored rather than raised.
@@ -134,15 +134,15 @@ Runtime config fetch is demand-driven per use-case key:
 
 | Situation | What your call sees |
 |---|---|
-| Use-case cache is fresh | Served from memory, no HTTP call |
-| Use-case cache is stale or missing | The resolved use case after one keyed fetch, or the cached fallback if the fetch fails |
+| Prompt cache is fresh | Served from memory, no HTTP call |
+| Prompt cache is stale or missing | The resolved use case after one keyed fetch, or the cached fallback if the fetch fails |
 | Same use case requested concurrently | The callers share one in-flight config fetch |
 | PromptOn returns `304 Not Modified` | The previous document for that key |
 | PromptOn returns `429` / `5xx`, times out, or is unreachable | The previous document for that key, and no retry for that key until 10 seconds elapse |
 | PromptOn unreachable, disk cache present for that key | The disk document, `source="disk"` |
 | PromptOn unreachable, only a bundle present for that key | The bundled document, `source="bundle"` |
 | PromptOn unreachable and **nothing cached for that key** | `UseCaseDocumentUnavailableError` saying exactly that |
-| A use-case document arrives for another project or environment | It is ignored; if nothing else is cached, the error names both sides rather than blaming the network |
+| A prompt document arrives for another project or environment | It is ignored; if nothing else is cached, the error names both sides rather than blaming the network |
 | `filled_prompt()` in `mode="test"`, `mode="offline"`, or with no key | No request is made: `ConfigurationError` in test mode, otherwise the cached answer, or `UseCaseDocumentUnavailableError` |
 
 ## The monitoring log record
@@ -156,7 +156,7 @@ or a background job that does not wrap the provider call.
 | `use_case`, `model`, `status`, `started_at` | Required. `status` is `ok` or `error` |
 | `kind` | `chat`, `text` or `embedding` |
 | `deployment_revision`, `prompt`, `prompt_version_number` | Readable prompt evidence. `deployment_revision` is a string like `v2026.09.30-1`; `prompt_version_number` is present when the prompt has a pinned version |
-| `model_id`, `deployment.id`, `prompt_version.id` | Legacy resource ids. They are `None` for schema v8 documents because v8 uses readable references instead of public resource UUIDs |
+| `model_id`, `deployment.id`, `prompt_version.id` | Cached aggregate resource ids. They are `None` for readable schema v1 documents because v1 uses readable references instead of public resource UUIDs |
 | `provider`, `model_used`, `upstream_provider` | Who actually served it |
 | Compatibility | Log requests no longer include retired resource UUID refs (`deployment_id`, `prompt_version_id`, `model_id`). Older released SDKs that still emit them need the matching server rollout before they can post logs to the new request contract |
 | `source` | `remote`, `disk`, `bundle` or `manual` |
@@ -168,7 +168,7 @@ or a background job that does not wrap the provider call.
 | `usage` | `input_tokens`, `output_tokens`, `cost_usd`, `cost_source`, `raw` |
 | `latency_ms`, `trace_id`, `sequence`, `end_user_ref` | Correlation |
 | `context`, `metadata` | Free-form. Keep them small: over 2 KB and 4 KB the server rejects the record |
-| `sdk` | `{"name": "prompton-python", "version": "0.7.1"}` |
+| `sdk` | `{"name": "prompton-python", "version": "0.8.0"}` |
 
 Before sending, the SDK applies the use case's payload policy: sampling (deterministic on the id,
 with errors and truncated answers always kept), `hash` or `none` modes, and truncation to the

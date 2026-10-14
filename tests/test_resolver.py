@@ -28,7 +28,7 @@ def snapshot() -> UseCaseDocument:
         },
         embed={"kind": "embedding", "model": "openai/text-embedding-3-small"},
     )
-    document["use_cases"]["draft"] = {"id": "uc-draft", "kind": "chat", "default_params": {}}
+    document["prompts"]["draft"] = {"id": "uc-draft", "kind": "chat", "default_params": {}}
     return UseCaseDocument.from_mapping(document)
 
 
@@ -75,20 +75,28 @@ def test_unknown_use_case_and_undeployed_use_case_are_different_errors(snapshot)
         resolve(snapshot, "draft")
 
 
-def test_a_dangling_reference_resolves_with_warnings_rather_than_failing(snapshot):
+def test_a_dangling_reference_fails_closed(snapshot):
     document = make_use_case_document(greeting={"messages": [{"role": "user", "content": "hi"}]})
     document["deployments"]["greeting"]["model_id"] = "gone"
     document["deployments"]["greeting"]["prompt_pins"]["default"] = "also-gone"
-    resolution = resolve(UseCaseDocument.from_mapping(document), "greeting")
-    assert resolution.model is None
-    assert resolution.prompt_version is None
-    assert resolution.warnings == (
-        "missing_prompt_version: also-gone",
-        "missing_model: gone",
-    )
+    with pytest.raises(UnresolvedError):
+        resolve(UseCaseDocument.from_mapping(document), "greeting")
 
 
-def test_schema8_readable_resources_have_no_public_resource_ids(snapshot_document):
+def test_decodes_variable_definitions_from_variables_and_rejects_old_input_schema_metadata(
+    snapshot_document,
+):
+    document = UseCaseDocument.from_mapping(readable_document(snapshot_document))
+    assert document.use_cases["greeting"].variables[0].name == "name"
+    assert not hasattr(document.use_cases["greeting"], "input_schema")
+
+    old = readable_document(snapshot_document)
+    old["prompts"]["greeting"]["input_schema"] = old["prompts"]["greeting"].pop("variables")
+    with pytest.raises(InvalidUseCaseDocumentError, match="not input_schema"):
+        UseCaseDocument.from_mapping(old)
+
+
+def test_schema1_readable_resources_have_no_public_resource_ids(snapshot_document):
     snapshot = UseCaseDocument.from_mapping(readable_document(snapshot_document))
     resolution = resolve(snapshot, "greeting")
     assert resolution.deployment == {"id": None, "revision": "v2026.09.30-1"}
@@ -100,7 +108,7 @@ def test_schema8_readable_resources_have_no_public_resource_ids(snapshot_documen
     assert resolution.messages[1]["content"] == "Say hello to {{ name }}."
 
 
-def test_schema9_single_prompt_chat_and_decision_documents():
+def test_schema1_single_prompt_chat_and_decision_documents():
     greeting = UseCaseDocument.from_mapping(single_prompt_document("greeting"))
     resolution = resolve(greeting, "greeting")
     assert resolution.deployment == {"id": None, "revision": "v2026.09.30-1"}
@@ -118,7 +126,7 @@ def test_schema9_single_prompt_chat_and_decision_documents():
     assert decision.request_path == "/api/v1/systemone"
 
 
-def test_schema9_rejects_incomplete_mixed_or_mismatched_single_prompt_documents():
+def test_schema1_rejects_incomplete_mixed_or_mismatched_single_prompt_documents():
     missing = single_prompt_document("greeting")
     missing.pop("prompt_version")
     with pytest.raises(InvalidUseCaseDocumentError, match="prompt_version is required"):
@@ -148,11 +156,11 @@ def test_schema9_rejects_incomplete_mixed_or_mismatched_single_prompt_documents(
         UseCaseDocument.from_mapping(bad_model)
 
 
-def test_schema8_scopes_prompt_versions_by_prompt_and_models_by_provider(snapshot_document):
+def test_schema1_scopes_prompt_versions_by_prompt_and_models_by_provider(snapshot_document):
     document = readable_document(snapshot_document)
     document["prompts"]["review"] = {
         "kind": "chat",
-        "input_schema": [],
+        "variables": [],
         "default_params": {},
         "payload_policy": None,
     }
@@ -191,7 +199,7 @@ def test_schema8_scopes_prompt_versions_by_prompt_and_models_by_provider(snapsho
     assert review.messages == ({"role": "user", "content": "Review {{ item }}."},)
 
 
-def test_schema8_invalid_pins_and_missing_references_fail_closed(snapshot_document):
+def test_schema1_invalid_pins_and_missing_references_fail_closed(snapshot_document):
     for prompt_version in ("2", "2abc", 2.9, 0):
         invalid = readable_document(snapshot_document)
         invalid["deployments"]["greeting"]["prompt_version"] = prompt_version
@@ -210,7 +218,7 @@ def test_schema8_invalid_pins_and_missing_references_fail_closed(snapshot_docume
         resolve(UseCaseDocument.from_mapping(missing_model), "greeting")
 
 
-def test_schema8_composite_keys_must_match_embedded_fields(snapshot_document):
+def test_schema1_composite_keys_must_match_embedded_fields(snapshot_document):
     bad_version = readable_document(snapshot_document)
     bad_version["prompt_versions"]["greeting@1"]["prompt"] = "review"
     with pytest.raises(UnresolvedError):
@@ -255,12 +263,12 @@ def test_the_source_and_etag_travel_with_the_resolution(snapshot):
 class TestSnapshotDecoding:
     def test_older_schema_versions_are_refused(self):
         with pytest.raises(UnsupportedSchemaVersionError):
-            UseCaseDocument.from_mapping({"schema_version": 2, "use_cases": {}})
+            UseCaseDocument.from_mapping({"schema_version": 2, "prompts": {}})
 
     def test_newer_schema_versions_are_refused(self):
         document = make_use_case_document(greeting={"messages": []})
         document["schema_version"] = SCHEMA_VERSION + 2
-        document["use_cases"]["greeting"]["brand_new_field"] = 1
+        document["prompts"]["greeting"]["brand_new_field"] = 1
         with pytest.raises(UnsupportedSchemaVersionError):
             UseCaseDocument.from_mapping(document)
 
@@ -293,7 +301,7 @@ class TestSnapshotDecoding:
             {
                 "schema_version": SCHEMA_VERSION,
                 "environment": "staging",
-                "use_cases": {"greeting": {"kind": "chat"}},
+                "prompts": {"greeting": {"kind": "chat"}},
                 "deployments": {},
                 "prompt_versions": {},
                 "models": {},

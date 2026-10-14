@@ -475,14 +475,14 @@ class TestServerDown:
         assert store.current("greeting").data.project == "demo"
         assert store.info()["stale"] is True
 
-    def test_schema9_single_prompt_response_is_cached_exported_and_reloaded_raw(self, tmp_path):
+    def test_schema1_single_prompt_response_is_cached_exported_and_reloaded_raw(self, tmp_path):
         raw = json.dumps(single_prompt_document("greeting")).encode("utf-8")
         transport = FakeTransport()
-        transport.push(HttpResponse(status=200, body=raw, headers={"etag": '"sha256-v9"'}))
+        transport.push(HttpResponse(status=200, body=raw, headers={"etag": '"sha256-v1"'}))
         store = build(tmp_path, transport, project="sdkfixture")
         store.start()
         entry = store.current("greeting")
-        assert entry.data.schema_version == 9
+        assert entry.data.schema_version == 1
         assert entry.raw == raw
 
         prompt_path = tmp_path / "snapshot.json.prompts" / "greeting.json"

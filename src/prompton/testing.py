@@ -1,7 +1,7 @@
 """Helpers for testing an app that uses PromptOn, without a server and without HTTP.
 
 Run your suite with ``mode="test"``: nothing is sent, and every monitoring log the app produced is
-kept on ``client.captured`` for you to assert on. Build a use-case document for the use cases
+kept on ``client.captured`` for you to assert on. Build a schema v1 prompt document for the prompts
 under test with :func:`make_use_case_document` and hand it to ``client.load_use_cases``.
 
     client = PromptOn(mode="test", api_key=None)
@@ -29,7 +29,7 @@ def make_use_case_document(
     environment: str = "production",
     **use_cases: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build a legacy schema-v7 use-case document for the given use cases.
+    """Build a schema v1 prompt document for the given use cases.
 
     Each keyword is a use case key; its value describes the pin::
 
@@ -49,10 +49,10 @@ def make_use_case_document(
         )
     """
     document: dict[str, Any] = {
-        "schema_version": 7,
+        "schema_version": 1,
         "project": project,
         "environment": environment,
-        "use_cases": {},
+        "prompts": {},
         "deployments": {},
         "prompt_versions": {},
         "models": {},
@@ -72,10 +72,10 @@ def make_use_case_document(
             "capabilities": [],
             "status": "active",
         }
-        document["use_cases"][key] = {
+        document["prompts"][key] = {
             "id": f"use-case-{index:04d}",
             "kind": kind,
-            "input_schema": spec.get("input_schema", []),
+            "variables": spec.get("variables", []),
             "default_params": spec.get("default_params", {}),
             "payload_policy": spec.get("payload_policy"),
         }

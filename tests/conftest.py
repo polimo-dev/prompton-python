@@ -35,7 +35,7 @@ def load_conformance(name: str) -> dict[str, Any]:
 def single_prompt_document(
     key: str = "greeting", environment: str = "production", **overrides: Any
 ) -> dict[str, Any]:
-    """Convert the readable schema v8 fixture into the schema v9 single-prompt shape."""
+    """Convert the readable schema v1 fixture into the schema v1 single-prompt shape."""
     readable = readable_document(
         make_use_case_document(
             project="sdkfixture",
@@ -46,6 +46,7 @@ def single_prompt_document(
                     {"role": "user", "content": "Say hello to {{ name }}."},
                 ],
                 "provider_options": {"only": ["OpenAI"]},
+                "variables": [{"name": "name", "type": "string", "required": True}],
             },
             sentiment={
                 "kind": "decision",
@@ -71,7 +72,7 @@ def single_prompt_document(
             "request_path": "/api/v1/chat/completions",
         }
     document = {
-        "schema_version": 9,
+        "schema_version": 1,
         "project": readable["project"],
         "environment": environment,
         "prompt": {"key": key, **prompt},
@@ -159,6 +160,7 @@ def snapshot_document() -> dict[str, Any]:
             "params": {"temperature": 0.2},
             "default_params": {"max_tokens": 256},
             "provider_options": {"only": ["OpenAI"]},
+            "variables": [{"name": "name", "type": "string", "required": True}],
         },
         summarize={
             "kind": "text",
@@ -175,7 +177,7 @@ def snapshot_bytes(snapshot_document: dict[str, Any]) -> bytes:
 
 
 def readable_document(document: dict[str, Any]) -> dict[str, Any]:
-    """Convert the test document into the schema v8 readable-resource wire shape."""
+    """Convert the test document into the schema v1 aggregate readable-resource wire shape."""
     legacy = json.loads(json.dumps(document))
     models_by_id = legacy["models"]
     versions_by_id = legacy["prompt_versions"]
@@ -204,7 +206,7 @@ def readable_document(document: dict[str, Any]) -> dict[str, Any]:
             prompt_versions[f"{key}@{number}"] = {
                 "prompt": key,
                 "number": number,
-                "kind": version.get("kind") or legacy["use_cases"][key]["kind"],
+                "kind": version.get("kind") or legacy["prompts"][key]["kind"],
                 "engine": version["engine"],
                 "messages": version["messages"],
                 "text_template": version["text_template"],
@@ -226,17 +228,17 @@ def readable_document(document: dict[str, Any]) -> dict[str, Any]:
         }
 
     return {
-        "schema_version": 8,
+        "schema_version": 1,
         "project": legacy["project"],
         "environment": legacy["environment"],
         "prompts": {
             key: {
                 "kind": use_case["kind"],
-                "input_schema": use_case["input_schema"],
+                "variables": use_case["variables"],
                 "default_params": use_case["default_params"],
                 "payload_policy": use_case["payload_policy"],
             }
-            for key, use_case in legacy["use_cases"].items()
+            for key, use_case in legacy["prompts"].items()
         },
         "deployments": deployments,
         "prompt_versions": prompt_versions,

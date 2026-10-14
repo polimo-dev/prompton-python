@@ -1,9 +1,8 @@
-"""Decoding ``GET /prompts`` (schema v4/v5/v6/v7/v8) into the structures the resolver reads.
+"""Decode schema v1 prompt detail and cached aggregate prompt documents.
 
 A deployment revision is a **pin, not a router**: one model plus one pinned prompt version per
-prompt name. Older documents - a stale disk cache, an old bundle - are refused, and the SDK
-keeps polling for a v4 one. Newer and legacy schema shapes are refused too: this SDK reads exactly
-schema v4/v5/v6/v7/v8/v9.
+prompt name. Lightweight prompt indexes are discovery-only and are rejected here. Older, newer and
+legacy schema shapes are refused: this SDK reads exactly ``schema_version: 1``.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ __all__ = [
     "UseCaseDocument",
 ]
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 1
 
 _KINDS = ("chat", "decision", "text", "embedding")
 _ENGINES = ("liquid", "raw")
@@ -45,13 +44,13 @@ class UnsupportedSchemaVersionError(InvalidUseCaseDocumentError):
     """The document announces a schema version this SDK does not read."""
 
     def __init__(self, version: int) -> None:
-        super().__init__(f"unsupported schema_version {version}; this SDK reads v4-v9")
+        super().__init__(f"unsupported schema_version {version}; this SDK reads schema_version 1")
         self.version = version
 
 
 @dataclass(frozen=True)
-class InputVariable:
-    """One entry of a use case's ``input_schema``."""
+class VariableDefinition:
+    """One variable definition declared by a use case."""
 
     name: str | None
     type: str = "string"
@@ -102,7 +101,7 @@ class UseCase:
     id: str | None
     key: str
     kind: str = "chat"
-    input_schema: tuple[InputVariable, ...] = ()
+    variables: tuple[VariableDefinition, ...] = ()
     default_params: dict[str, Any] = field(default_factory=dict)
     payload_policy: PayloadPolicy | None = None
 
@@ -178,11 +177,11 @@ class UseCaseDocument:
         warnings: list[str] = []
         version = _schema_version(document)
 
-        normalized = _normalize_single_prompt_document(document) if version == 9 else document
+        normalized = _normalize_prompt_document(document)
 
-        raw_use_cases = normalized.get("use_cases") or normalized.get("prompts")
+        raw_use_cases = normalized.get("prompts")
         if not isinstance(raw_use_cases, Mapping):
-            raise InvalidUseCaseDocumentError("use_cases/prompts is required and must be an object")
+            raise InvalidUseCaseDocumentError("prompts is required and must be an object")
 
         use_cases = {
             str(key): _decode_use_case(str(key), value, warnings)
@@ -210,51 +209,59 @@ class UseCaseDocument:
 # ---------------------------------------------------------------------------
 
 
-def _normalize_single_prompt_document(document: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_prompt_document(document: Mapping[str, Any]) -> dict[str, Any] | Mapping[str, Any]:
+    if isinstance(document.get("prompts"), list):
+        raise InvalidUseCaseDocumentError(
+            "prompt index responses are discovery only and cannot be loaded as configuration"
+        )
+    has_single = any(k in document for k in ("prompt", "deployment", "prompt_version", "model"))
+    if not has_single:
+        return document
+
     for plural in ("prompts", "deployments", "prompt_versions", "models"):
         if plural in document:
             raise InvalidUseCaseDocumentError(
-                f"schema_version 9 prompt document must use singular resources; found {plural}"
+                f"schema_version 1 prompt detail must use singular resources; found {plural}"
             )
     prompt = document.get("prompt")
     deployment = document.get("deployment")
     version = document.get("prompt_version")
     model = document.get("model")
     if not isinstance(prompt, Mapping):
-        raise InvalidUseCaseDocumentError("schema v9 prompt document prompt is required")
+        raise InvalidUseCaseDocumentError("schema v1 prompt document prompt is required")
     if not isinstance(deployment, Mapping):
-        raise InvalidUseCaseDocumentError("schema v9 prompt document deployment is required")
+        raise InvalidUseCaseDocumentError("schema v1 prompt document deployment is required")
     if not isinstance(version, Mapping):
-        raise InvalidUseCaseDocumentError("schema v9 prompt document prompt_version is required")
+        raise InvalidUseCaseDocumentError("schema v1 prompt document prompt_version is required")
     if not isinstance(model, Mapping):
-        raise InvalidUseCaseDocumentError("schema v9 prompt document model is required")
+        raise InvalidUseCaseDocumentError("schema v1 prompt document model is required")
 
     key = _strict_str(prompt.get("key"))
     if key is None or key.strip() == "":
-        raise InvalidUseCaseDocumentError("schema v9 prompt.key is required")
+        raise InvalidUseCaseDocumentError("schema v1 prompt.key is required")
     version_prompt = _strict_str(version.get("prompt"))
     if version_prompt != key:
-        raise InvalidUseCaseDocumentError("schema v9 prompt_version.prompt must match prompt.key")
+        raise InvalidUseCaseDocumentError("schema v1 prompt_version.prompt must match prompt.key")
     number = _strict_positive_int(version.get("number"))
     if number is None:
         raise InvalidUseCaseDocumentError(
-            "schema v9 prompt_version.number must be a positive integer"
+            "schema v1 prompt_version.number must be a positive integer"
         )
     if deployment.get("prompt_version") != number:
         raise InvalidUseCaseDocumentError(
-            "schema v9 deployment.prompt_version must match prompt_version.number"
+            "schema v1 deployment.prompt_version must match prompt_version.number"
         )
     provider = _strict_str(model.get("provider"))
     model_name = _strict_str(model.get("model"))
     if provider is None or model_name is None:
-        raise InvalidUseCaseDocumentError("schema v9 model provider and model are required")
+        raise InvalidUseCaseDocumentError("schema v1 model provider and model are required")
     if deployment.get("provider") != provider or deployment.get("model") != model_name:
-        raise InvalidUseCaseDocumentError("schema v9 deployment provider/model must match model")
+        raise InvalidUseCaseDocumentError("schema v1 deployment provider/model must match model")
 
     prompt_body = dict(prompt)
     prompt_body.pop("key", None)
     return {
-        "schema_version": 9,
+        "schema_version": 1,
         "project": document.get("project"),
         "environment": document.get("environment"),
         "prompts": {key: prompt_body},
@@ -272,7 +279,7 @@ def _schema_version(document: Mapping[str, Any]) -> int:
         raise InvalidUseCaseDocumentError(
             f"schema_version must be integer {SCHEMA_VERSION}, got {raw!r}"
         )
-    if raw in (4, 5, 6, 7, 8, 9):
+    if raw == SCHEMA_VERSION:
         return raw
     raise UnsupportedSchemaVersionError(raw)
 
@@ -347,13 +354,18 @@ def _decode_use_case(key: str, raw: Mapping[str, Any], warnings: list[str]) -> U
         id=_as_str(raw.get("id")),
         key=key,
         kind=_enum(raw.get("kind"), _KINDS, "chat", "unknown_kind", warnings),
-        input_schema=tuple(_decode_input_schema(raw.get("input_schema"), warnings)),
+        variables=tuple(_decode_variables(raw, warnings)),
         default_params=stringify_keys(raw.get("default_params")),
         payload_policy=_decode_payload_policy(raw.get("payload_policy"), warnings),
     )
 
 
-def _decode_input_schema(raw: Any, warnings: list[str]) -> list[InputVariable]:
+def _decode_variables(
+    raw_use_case: Mapping[str, Any], warnings: list[str]
+) -> list[VariableDefinition]:
+    if "input_schema" in raw_use_case:
+        raise InvalidUseCaseDocumentError("prompt variables must use variables, not input_schema")
+    raw = raw_use_case.get("variables")
     if not isinstance(raw, list):
         return []
     variables = []
@@ -362,7 +374,7 @@ def _decode_input_schema(raw: Any, warnings: list[str]) -> list[InputVariable]:
             warnings.append(f"invalid_variable: {entry!r}")
             continue
         variables.append(
-            InputVariable(
+            VariableDefinition(
                 name=_as_str(entry.get("name")),
                 type=_enum(
                     entry.get("type"), _VARIABLE_TYPES, "string", "unknown_variable_type", warnings
@@ -394,7 +406,7 @@ def _decode_payload_policy(raw: Any, warnings: list[str]) -> PayloadPolicy | Non
 
 
 def _decode_deployments(
-    raw: Any, schema_version: int, warnings: list[str]
+    raw: Any, _schema_version: int, warnings: list[str]
 ) -> dict[str, Deployment]:
     if raw is None:
         return {}
@@ -407,12 +419,9 @@ def _decode_deployments(
             warnings.append(f"invalid_deployment: {key}")
             continue
         pins: dict[str, str] = {}
-        if schema_version >= 8:
-            number = _strict_positive_int(value.get("prompt_version"))
-            if number is not None:
-                pins["default"] = f"{key}@{number}"
-            elif value.get("prompt_version") is not None:
-                warnings.append(f"invalid_prompt_pin: {key}/default")
+        number = _strict_positive_int(value.get("prompt_version"))
+        if number is not None:
+            pins["default"] = f"{key}@{number}"
         else:
             raw_pins = value.get("prompt_pins") or value.get("template_pins")
             if isinstance(raw_pins, Mapping):
@@ -422,22 +431,19 @@ def _decode_deployments(
                         pins[name_str] = id_str
                     else:
                         warnings.append(f"invalid_prompt_pin: {key}/{name}")
-            elif raw_pins is not None:
-                warnings.append(f"invalid_prompt_pins: {key}")
-        model_id = (
-            _model_key(value.get("provider"), value.get("model"))
-            if schema_version >= 8
-            else _as_str(value.get("model_id"))
-        )
-        if schema_version >= 8 and model_id is None:
+            elif value.get("prompt_version") is not None:
+                warnings.append(f"invalid_prompt_pin: {key}/default")
+        readable_model_id = _model_key(value.get("provider"), value.get("model"))
+        model_id = readable_model_id or _as_str(value.get("model_id"))
+        if model_id is None:
             warnings.append(f"invalid_model_ref: {key}")
         deployments[str(key)] = Deployment(
-            id=None if schema_version >= 8 else _as_str(value.get("id")),
+            id=None if readable_model_id is not None else _as_str(value.get("id")),
             use_case_key=(
                 _as_str(value.get("use_case_key")) or _as_str(value.get("prompt_key")) or str(key)
             ),
             revision=_as_revision(value.get("revision"), str(key)),
-            model_id=f"invalid:{key}" if schema_version >= 8 and model_id is None else model_id,
+            model_id=f"invalid:{key}" if model_id is None else model_id,
             params=stringify_keys(value.get("params")),
             provider_options=stringify_keys(value.get("provider_options")),
             prompt_pins=pins,
@@ -448,39 +454,33 @@ def _decode_deployments(
 
 
 def _decode_prompt_versions(
-    raw: Any, schema_version: int, warnings: list[str]
+    raw: Any, _schema_version: int, warnings: list[str]
 ) -> dict[str, PromptVersion]:
     versions: dict[str, PromptVersion] = {}
     for entry_id, entry in _iter_by_id(raw, warnings):
         messages = _decode_messages(entry.get("messages"), warnings)
-        prompt_key = (
-            _strict_str(entry.get("prompt"))
-            if schema_version >= 8
-            else _as_str(entry.get("prompt"))
-        )
-        number = (
-            _strict_positive_int(entry.get("number"))
-            if schema_version >= 8
-            else _as_int(entry.get("number"))
-        )
-        lookup_key = (
-            f"{prompt_key}@{number}" if schema_version >= 8 and prompt_key and number else entry_id
-        )
-        if schema_version >= 8 and (not prompt_key or number is None or lookup_key != entry_id):
+        prompt_key = _strict_str(entry.get("prompt"))
+        number = _strict_positive_int(entry.get("number"))
+        readable_key = f"{prompt_key}@{number}" if prompt_key and number is not None else None
+        if (prompt_key is not None or "prompt" in entry) and readable_key is None:
             warnings.append(f"invalid_prompt_version: {entry_id}")
             continue
+        if readable_key is not None and readable_key != entry_id:
+            warnings.append(f"invalid_prompt_version: {entry_id}")
+            continue
+        lookup_key = readable_key or entry_id
         if lookup_key in versions:
             warnings.append(f"invalid_entry: duplicate:{lookup_key}")
             continue
         versions[lookup_key] = PromptVersion(
-            id=None if schema_version >= 8 else entry_id,
+            id=None if readable_key is not None else entry_id,
             lookup_key=lookup_key,
             prompt_id=(
                 prompt_key
-                if schema_version >= 8
-                else (_as_str(entry.get("prompt_id")) or _as_str(entry.get("prompt_template_id")))
+                or _as_str(entry.get("prompt_id"))
+                or _as_str(entry.get("prompt_template_id"))
             ),
-            number=number,
+            number=number or _as_int(entry.get("number")),
             engine=_enum(entry.get("engine"), _ENGINES, "liquid", "unknown_engine", warnings),
             messages=messages,
             text_template=_as_str(entry.get("text_template")),
@@ -528,33 +528,25 @@ def _decode_tools(raw: Any, warnings: list[str]) -> dict[str, Any] | None:
     return tools
 
 
-def _decode_models(raw: Any, schema_version: int, warnings: list[str]) -> dict[str, Model]:
+def _decode_models(raw: Any, _schema_version: int, warnings: list[str]) -> dict[str, Model]:
     models: dict[str, Model] = {}
     for entry_id, entry in _iter_by_id(raw, warnings):
         capabilities = entry.get("capabilities")
         if not isinstance(capabilities, list):
             capabilities = [] if capabilities is None else [capabilities]
-        provider = (
-            _strict_str(entry.get("provider"))
-            if schema_version >= 8
-            else _as_str(entry.get("provider"))
-        )
-        model = (
-            _strict_str(entry.get("model"))
-            if schema_version >= 8
-            else _as_str(entry.get("model_id"))
-        )
-        lookup_key = (
-            f"{provider}:{model}" if schema_version >= 8 and provider and model else entry_id
-        )
-        if schema_version >= 8 and (not provider or not model or lookup_key != entry_id):
+        provider = _strict_str(entry.get("provider"))
+        readable_model = _strict_str(entry.get("model"))
+        model = readable_model or _as_str(entry.get("model_id"))
+        readable_key = f"{provider}:{readable_model}" if provider and readable_model else None
+        if readable_key is not None and readable_key != entry_id:
             warnings.append(f"invalid_entry: {entry_id}")
             continue
+        lookup_key = readable_key or entry_id
         if lookup_key in models:
             warnings.append(f"invalid_entry: duplicate:{lookup_key}")
             continue
         models[lookup_key] = Model(
-            id=None if schema_version >= 8 else entry_id,
+            id=None if readable_key is not None else entry_id,
             lookup_key=lookup_key,
             provider=provider,
             model_id=model,

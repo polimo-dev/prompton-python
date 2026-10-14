@@ -3,5 +3,5 @@
 from __future__ import annotations
 
 SDK_NAME = "prompton-python"
-VERSION = "0.7.1"
+VERSION = "0.8.0"
 USER_AGENT = f"{SDK_NAME}/{VERSION}"

@@ -516,34 +516,10 @@
       "document_ref": "degraded",
       "environment": "production",
       "expect": {
-        "deployment_id": "0198f2a1-0000-7000-8000-00000000d021",
-        "key": "greeting",
-        "kind": "chat",
-        "model": null,
-        "model_id": null,
-        "params": {
-          "temperature": 0.4
-        },
-        "prompt_version": null,
-        "provider": null,
-        "provider_options": {
-          "only": [
-            "OpenAI"
-          ]
-        },
-        "revision": "v2026.09.30-1",
-        "source": "remote",
-        "template": "default",
-        "template_names": [
-          "default"
-        ],
-        "warnings": [
-          "missing_prompt_version: 0198f2a1-0000-7000-8000-0000000000ff",
-          "missing_model: 0198f2a1-0000-7000-8000-0000000000fe"
-        ]
+        "error": "unresolved"
       },
       "name": "degraded/missing_prompt_version_and_model",
-      "note": "the document references ids it does not contain: prompt selection still succeeds, with warnings and null fields",
+      "note": "schema v1 fails closed when the document references prompt versions or models it does not contain",
       "prompt_key": "greeting"
     }
   ],
@@ -551,7 +527,7 @@
   "default_template": "default",
   "description": "Prompt selection: prompt document + prompt (+ template name) -> which model, params and template version to use, then filling when `variables` is present. This is exactly what POST /api/v1/prompts/{key}/render does on the server.",
   "document_notes": {
-    "degraded": "Synthetic. The deployment points at a template version id and a model id the document does not contain, to pin down the warning path. A healthy server never emits this.",
+    "degraded": "Synthetic. The deployment points at a template version id and a model id the document does not contain; schema v1 SDKs fail closed instead of treating the pin as usable.",
     "production": "The everyday shape: three deployed prompts (chat with two template names, text, embedding) plus one prompt that has never been deployed. Field for field what GET /prompts returns.",
     "staging": "The same project in another environment: one prompt, a different revision, different params and only the default template pinned."
   },
@@ -583,7 +559,6 @@
             "temperature": 0.4
           },
           "id": "0198f2a1-0000-7000-8000-00000000c001",
-          "input_schema": [],
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -591,10 +566,11 @@
             "mode": "full",
             "retention_days": 30,
             "sample_rate": 1.0
-          }
+          },
+          "variables": []
         }
       },
-      "schema_version": 5
+      "schema_version": 1
     },
     "production": {
       "deployments": {
@@ -766,7 +742,6 @@
         "draft": {
           "default_params": {},
           "id": "0198f2a1-0000-7000-8000-00000000c004",
-          "input_schema": [],
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -774,18 +749,12 @@
             "mode": "full",
             "retention_days": 30,
             "sample_rate": 1.0
-          }
+          },
+          "variables": []
         },
         "embed": {
           "default_params": {},
           "id": "0198f2a1-0000-7000-8000-00000000c003",
-          "input_schema": [
-            {
-              "name": "text",
-              "required": true,
-              "type": "string"
-            }
-          ],
           "kind": "embedding",
           "payload_policy": {
             "encrypt": false,
@@ -793,7 +762,14 @@
             "mode": "hash",
             "retention_days": 30,
             "sample_rate": 1.0
-          }
+          },
+          "variables": [
+            {
+              "name": "text",
+              "required": true,
+              "type": "string"
+            }
+          ]
         },
         "greeting": {
           "default_params": {
@@ -801,13 +777,6 @@
             "temperature": 0.7
           },
           "id": "0198f2a1-0000-7000-8000-00000000c001",
-          "input_schema": [
-            {
-              "name": "name",
-              "required": true,
-              "type": "string"
-            }
-          ],
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -815,20 +784,20 @@
             "mode": "full",
             "retention_days": 30,
             "sample_rate": 1.0
-          }
+          },
+          "variables": [
+            {
+              "name": "name",
+              "required": true,
+              "type": "string"
+            }
+          ]
         },
         "summarize": {
           "default_params": {
             "temperature": 0.0
           },
           "id": "0198f2a1-0000-7000-8000-00000000c002",
-          "input_schema": [
-            {
-              "name": "items",
-              "required": true,
-              "type": "list"
-            }
-          ],
           "kind": "text",
           "payload_policy": {
             "encrypt": false,
@@ -836,18 +805,18 @@
             "mode": "full",
             "retention_days": 30,
             "sample_rate": 1.0
-          }
+          },
+          "variables": [
+            {
+              "name": "items",
+              "required": true,
+              "type": "list"
+            }
+          ]
         },
         "tool_chat": {
           "default_params": {},
           "id": "0198f2a1-0000-7000-8000-00000000c005",
-          "input_schema": [
-            {
-              "name": "input",
-              "required": true,
-              "type": "string"
-            }
-          ],
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -855,10 +824,17 @@
             "mode": "full",
             "retention_days": 30,
             "sample_rate": 1.0
-          }
+          },
+          "variables": [
+            {
+              "name": "input",
+              "required": true,
+              "type": "string"
+            }
+          ]
         }
       },
-      "schema_version": 5
+      "schema_version": 1
     },
     "staging": {
       "deployments": {
@@ -924,13 +900,6 @@
             "temperature": 0.7
           },
           "id": "0198f2a1-0000-7000-8000-00000000c001",
-          "input_schema": [
-            {
-              "name": "name",
-              "required": true,
-              "type": "string"
-            }
-          ],
           "kind": "chat",
           "payload_policy": {
             "encrypt": false,
@@ -938,10 +907,17 @@
             "mode": "full",
             "retention_days": 30,
             "sample_rate": 0.5
-          }
+          },
+          "variables": [
+            {
+              "name": "name",
+              "required": true,
+              "type": "string"
+            }
+          ]
         }
       },
-      "schema_version": 5
+      "schema_version": 1
     }
   },
   "error_categories": {
