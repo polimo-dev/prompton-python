@@ -10,7 +10,7 @@ from prompton.resolver import resolve
 from prompton.snapshot_data import InvalidUseCaseDocumentError, UseCaseDocument
 from prompton.template import render, render_messages
 
-ROUNDTRIP = Path("/Users/ys/ws/.omx/artifacts/variables-20261014/roundtrip")
+ROUNDTRIP = Path(__file__).with_name("fixtures") / "schema1"
 
 
 def fixture(name: str) -> dict[str, Any]:
@@ -36,14 +36,14 @@ def test_real_chat_detail_decodes_and_renders_like_the_server() -> None:
     detail = fixture("chat-detail.json")
     variables = fixture("chat-variables.json")
     rendered = fixture("chat-render.json")
+    snapshot = UseCaseDocument.from_mapping(detail)
     assert {
         "name": "question",
         "type": "string",
         "required": True,
         "description": "Question to answer",
         "example": "refund",
-    } in detail["prompt"]["variables"]
-    snapshot = UseCaseDocument.from_mapping(detail)
+    } in [variable.__dict__ for variable in snapshot.use_cases["support_reply"].variables]
     resolution = resolve(snapshot, rendered["key"])
 
     assert (
@@ -59,14 +59,14 @@ def test_real_decision_detail_decodes_and_renders_like_the_server() -> None:
     detail = fixture("decision-detail.json")
     variables = fixture("decision-variables.json")
     rendered = fixture("decision-render.json")
+    snapshot = UseCaseDocument.from_mapping(detail)
     assert {
         "name": "ticket",
         "type": "string",
         "required": True,
         "description": "Ticket summary",
         "example": "refund",
-    } in detail["prompt"]["variables"]
-    snapshot = UseCaseDocument.from_mapping(detail)
+    } in [variable.__dict__ for variable in snapshot.use_cases["decision_triage"].variables]
     resolution = resolve(snapshot, rendered["key"])
 
     assert resolution.kind == "decision"
