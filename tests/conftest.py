@@ -11,7 +11,7 @@ import pytest
 
 from prompton.errors import TransportError
 from prompton.http import HttpResponse
-from prompton.testing import make_use_case_document
+from prompton.testing import make_prompt_document
 
 CONFORMANCE = Path(__file__).parent / "conformance"
 
@@ -37,7 +37,7 @@ def single_prompt_document(
 ) -> dict[str, Any]:
     """Convert the readable schema v1 fixture into the schema v1 single-prompt shape."""
     readable = readable_document(
-        make_use_case_document(
+        make_prompt_document(
             project="sdkfixture",
             environment=environment,
             greeting={
@@ -147,7 +147,7 @@ def transport_error() -> TransportError:
 
 @pytest.fixture
 def snapshot_document() -> dict[str, Any]:
-    return make_use_case_document(
+    return make_prompt_document(
         project="sdkfixture",
         environment="production",
         greeting={
@@ -238,12 +238,12 @@ def readable_document(document: dict[str, Any]) -> dict[str, Any]:
         "environment": legacy["environment"],
         "prompts": {
             key: {
-                "kind": use_case["kind"],
-                "variables": use_case["variables"],
-                "default_params": use_case["default_params"],
-                "payload_policy": use_case["payload_policy"],
+                "kind": prompt["kind"],
+                "variables": prompt["variables"],
+                "default_params": prompt["default_params"],
+                "payload_policy": prompt["payload_policy"],
             }
-            for key, use_case in legacy["prompts"].items()
+            for key, prompt in legacy["prompts"].items()
         },
         "deployments": deployments,
         "prompt_versions": prompt_versions,

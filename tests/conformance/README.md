@@ -23,7 +23,7 @@ Each file records the commit it was generated from in `generated_from.commit`.
 | File | What it pins down | Cases |
 |---|---|---|
 | `template.json` | Prompt rendering: the Liquid subset PromptOn allows | 72 render (4 non-normative), 10 lint, 5 detected-variables |
-| `prompt.json` | Prompt document + prompt (+ prompt name) → model, params, prompt version, rendered messages | 3 documents, 15 cases |
+| `prompt_key.json` | Prompt document + prompt (+ prompt name) → model, params, prompt version, rendered messages | 3 documents, 15 cases |
 | `truncation.json` | The payload policy the SDK applies to a monitoring log before sending it | 19 cases + 5 sampling buckets |
 | `stop_kind.json` | Provider `finish_reason` → PromptOn `stop_kind` | 22 cases |
 | `log_record.json` | Complete monitoring-log records and the batch envelope | 5 records |
@@ -50,12 +50,12 @@ For each case, render `template` with `variables` using the engine named in `eng
 Both are optional for an SDK that only renders: the server rejects a non-conforming template when
 the prompt version is committed, so a template that fails lint can never reach a prompt document.
 
-### prompt.json
+### prompt_key.json
 
 `documents` is a map of reference name → a complete schema-v5 prompt document, exactly as
 `GET /api/v1/prompts?environment=…` returns it. For each case, decode
 `documents[document_ref]`, look up `prompt_key` with the optional `prompt` name, and — when
-`variables` is present — render the resulting prompt. This is precisely what `POST /api/v1/prompts/{key}/render`
+`variables` is present — render the resulting prompt. This is precisely what `POST /api/v1/prompts/{key}/prompt`
 does on the server.
 
 ### truncation.json
@@ -75,7 +75,7 @@ log as `POST /api/v1/logs` accepts it, and `batch_envelope.request` wraps all of
 batch. Use them to check your record builder's output shape and your batch envelope. `field_rules`
 lists what the server validates.
 
-**An LLM call id must be a UUIDv7, not a UUIDv4.** The request-level validation accepts any UUID
+**A generation id must be a UUIDv7, not a UUIDv4.** The request-level validation accepts any UUID
 string, but the column is a UUIDv7 type and a v4 id fails on write — the record comes back in
 `rejected` with `record could not be stored`, which does not say why. Generate 48 bits of unix
 milliseconds, the version nibble 7, then random bits.
@@ -149,7 +149,7 @@ and the environment is a request parameter that decides which prompt document yo
 * Prompt exists but has no deployment in this environment → `unresolved`.
 * The deployment pins no version under the requested name → `unknown_template`. **There is no
   fallback to `"default"`**: shipping English to a request that asked for `"ko"` is worse than an
-  error. The expectation carries `template_names`, which is what the server's 404 lists.
+  error. The expectation carries `template_names`, which is what the SDK reports.
 * Prompt of kind `embedding` has no prompt at all: `prompt` and `prompt_version` are `null`, and
   a prompt name passed with the request is ignored rather than rejected.
 * If the prompt document references a prompt version or model id it does not contain, lookup still

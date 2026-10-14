@@ -19,7 +19,7 @@ ACCEPTED = {"accepted": 1, "duplicates": 0, "rejected": []}
 def record(**overrides):
     item = {
         "id": uuid7(),
-        "use_case": "greeting",
+        "prompt_key": "greeting",
         "model": "openai/gpt-4o-mini",
         "status": "ok",
         "started_at": "2026-09-04T00:00:00.000000Z",

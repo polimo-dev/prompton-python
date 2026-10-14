@@ -18,12 +18,12 @@ from .params import stringify_keys
 __all__ = [
     "SCHEMA_VERSION",
     "Deployment",
-    "InvalidUseCaseDocumentError",
+    "InvalidPromptDocumentError",
     "Model",
+    "Prompt",
+    "PromptDocument",
     "PromptVersion",
     "UnsupportedSchemaVersionError",
-    "UseCase",
-    "UseCaseDocument",
 ]
 
 SCHEMA_VERSION = 1
@@ -36,11 +36,11 @@ _VARIABLE_TYPES = ("string", "number", "boolean", "list", "map")
 DEFAULT_MAX_BYTES = 262_144
 
 
-class InvalidUseCaseDocumentError(PromptOnError):
-    """The document is not a use-case document the SDK can read."""
+class InvalidPromptDocumentError(PromptOnError):
+    """The document is not a prompt document the SDK can read."""
 
 
-class UnsupportedSchemaVersionError(InvalidUseCaseDocumentError):
+class UnsupportedSchemaVersionError(InvalidPromptDocumentError):
     """The document announces a schema version this SDK does not read."""
 
     def __init__(self, version: int) -> None:
@@ -50,7 +50,7 @@ class UnsupportedSchemaVersionError(InvalidUseCaseDocumentError):
 
 @dataclass(frozen=True)
 class VariableDefinition:
-    """One variable definition declared by a use case."""
+    """One variable definition declared by a prompt."""
 
     name: str | None
     type: str = "string"
@@ -81,21 +81,21 @@ class PayloadPolicy:
 
 @dataclass(frozen=True)
 class Deployment:
-    """The live pin for one use case in one environment."""
+    """The live pin for one prompt in one environment."""
 
     id: str | None
-    use_case_key: str
+    prompt_key: str
     revision: str | None = None
     model_id: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
     provider_options: dict[str, Any] = field(default_factory=dict)
-    prompt_pins: dict[str, str] = field(default_factory=dict)
+    template_pins: dict[str, str] = field(default_factory=dict)
     api: str | None = None
     request_path: str | None = None
 
 
 @dataclass(frozen=True)
-class UseCase:
+class Prompt:
     """One LLM call site, as the control plane describes it."""
 
     id: str | None
@@ -140,39 +140,39 @@ class Model:
 
 
 @dataclass(frozen=True)
-class UseCaseDocument:
-    """A decoded use-case document."""
+class PromptDocument:
+    """A decoded prompt document."""
 
     schema_version: int = SCHEMA_VERSION
     project: str | None = None
     environment: str | None = None
-    use_cases: dict[str, UseCase] = field(default_factory=dict)
+    prompts: dict[str, Prompt] = field(default_factory=dict)
     deployments: dict[str, Deployment] = field(default_factory=dict)
     prompt_versions: dict[str, PromptVersion] = field(default_factory=dict)
     models: dict[str, Model] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
 
-    def deployment_for(self, use_case_key: str) -> Deployment | None:
-        return self.deployments.get(use_case_key)
+    def deployment_for(self, prompt_key: str) -> Deployment | None:
+        return self.deployments.get(prompt_key)
 
     @classmethod
-    def from_json(cls, raw: bytes | str) -> UseCaseDocument:
-        """Decode a JSON document. Raises :class:`InvalidUseCaseDocumentError`."""
+    def from_json(cls, raw: bytes | str) -> PromptDocument:
+        """Decode a JSON document. Raises :class:`InvalidPromptDocumentError`."""
         try:
             document = json.loads(raw)
         except (ValueError, UnicodeDecodeError) as error:
-            raise InvalidUseCaseDocumentError(
-                f"use-case document is not valid JSON: {error}"
+            raise InvalidPromptDocumentError(
+                f"prompt document is not valid JSON: {error}"
             ) from error
         return cls.from_mapping(document)
 
     @classmethod
-    def from_mapping(cls, document: Any) -> UseCaseDocument:
+    def from_mapping(cls, document: Any) -> PromptDocument:
         """Decode an already-parsed document."""
-        if isinstance(document, UseCaseDocument):
+        if isinstance(document, PromptDocument):
             return document
         if not isinstance(document, Mapping):
-            raise InvalidUseCaseDocumentError("use-case document must be an object")
+            raise InvalidPromptDocumentError("prompt document must be an object")
 
         warnings: list[str] = []
         version = _schema_version(document)
@@ -181,15 +181,15 @@ class UseCaseDocument:
 
         for collection in ("prompts", "deployments", "prompt_versions", "models"):
             if not isinstance(normalized.get(collection), Mapping):
-                raise InvalidUseCaseDocumentError(
+                raise InvalidPromptDocumentError(
                     f"{collection} is required and must be a keyed object"
                 )
 
-        raw_use_cases = normalized.get("prompts")
+        raw_prompts = normalized.get("prompts")
 
-        use_cases = {
-            str(key): _decode_use_case(str(key), value, warnings)
-            for key, value in raw_use_cases.items()
+        prompts = {
+            str(key): _decode_prompt(str(key), value, warnings)
+            for key, value in raw_prompts.items()
             if isinstance(value, Mapping)
         }
         deployments = _decode_deployments(normalized.get("deployments"), warnings)
@@ -200,7 +200,7 @@ class UseCaseDocument:
             schema_version=version,
             project=_as_str(normalized.get("project")),
             environment=_as_str(normalized.get("environment")),
-            use_cases=use_cases,
+            prompts=prompts,
             deployments=deployments,
             prompt_versions=prompt_versions,
             models=models,
@@ -213,7 +213,7 @@ class UseCaseDocument:
 
 def _normalize_prompt_document(document: Mapping[str, Any]) -> dict[str, Any] | Mapping[str, Any]:
     if isinstance(document.get("prompts"), list):
-        raise InvalidUseCaseDocumentError(
+        raise InvalidPromptDocumentError(
             "prompt index responses are discovery only and cannot be loaded as configuration"
         )
     has_single = any(k in document for k in ("prompt", "deployment", "prompt_version", "model"))
@@ -222,7 +222,7 @@ def _normalize_prompt_document(document: Mapping[str, Any]) -> dict[str, Any] | 
 
     for plural in ("prompts", "deployments", "prompt_versions", "models"):
         if plural in document:
-            raise InvalidUseCaseDocumentError(
+            raise InvalidPromptDocumentError(
                 f"schema_version 1 prompt detail must use singular resources; found {plural}"
             )
     prompt = document.get("prompt")
@@ -230,35 +230,35 @@ def _normalize_prompt_document(document: Mapping[str, Any]) -> dict[str, Any] | 
     version = document.get("prompt_version")
     model = document.get("model")
     if not isinstance(prompt, Mapping):
-        raise InvalidUseCaseDocumentError("schema v1 prompt document prompt is required")
+        raise InvalidPromptDocumentError("schema v1 prompt document prompt is required")
     if not isinstance(deployment, Mapping):
-        raise InvalidUseCaseDocumentError("schema v1 prompt document deployment is required")
+        raise InvalidPromptDocumentError("schema v1 prompt document deployment is required")
     if not isinstance(version, Mapping):
-        raise InvalidUseCaseDocumentError("schema v1 prompt document prompt_version is required")
+        raise InvalidPromptDocumentError("schema v1 prompt document prompt_version is required")
     if not isinstance(model, Mapping):
-        raise InvalidUseCaseDocumentError("schema v1 prompt document model is required")
+        raise InvalidPromptDocumentError("schema v1 prompt document model is required")
 
     key = _strict_str(prompt.get("key"))
     if key is None or key.strip() == "":
-        raise InvalidUseCaseDocumentError("schema v1 prompt.key is required")
+        raise InvalidPromptDocumentError("schema v1 prompt.key is required")
     version_prompt = _strict_str(version.get("prompt"))
     if version_prompt != key:
-        raise InvalidUseCaseDocumentError("schema v1 prompt_version.prompt must match prompt.key")
+        raise InvalidPromptDocumentError("schema v1 prompt_version.prompt must match prompt.key")
     number = _strict_positive_int(version.get("number"))
     if number is None:
-        raise InvalidUseCaseDocumentError(
+        raise InvalidPromptDocumentError(
             "schema v1 prompt_version.number must be a positive integer"
         )
     if deployment.get("prompt_version") != number:
-        raise InvalidUseCaseDocumentError(
+        raise InvalidPromptDocumentError(
             "schema v1 deployment.prompt_version must match prompt_version.number"
         )
     provider = _strict_str(model.get("provider"))
     model_name = _strict_str(model.get("model"))
     if provider is None or model_name is None:
-        raise InvalidUseCaseDocumentError("schema v1 model provider and model are required")
+        raise InvalidPromptDocumentError("schema v1 model provider and model are required")
     if deployment.get("provider") != provider or deployment.get("model") != model_name:
-        raise InvalidUseCaseDocumentError("schema v1 deployment provider/model must match model")
+        raise InvalidPromptDocumentError("schema v1 deployment provider/model must match model")
 
     prompt_body = dict(prompt)
     prompt_body.pop("key", None)
@@ -276,9 +276,9 @@ def _normalize_prompt_document(document: Mapping[str, Any]) -> dict[str, Any] | 
 def _schema_version(document: Mapping[str, Any]) -> int:
     raw = document.get("schema_version")
     if raw is None:
-        raise InvalidUseCaseDocumentError("schema_version is required")
+        raise InvalidPromptDocumentError("schema_version is required")
     if not isinstance(raw, int) or isinstance(raw, bool):
-        raise InvalidUseCaseDocumentError(
+        raise InvalidPromptDocumentError(
             f"schema_version must be integer {SCHEMA_VERSION}, got {raw!r}"
         )
     if raw == SCHEMA_VERSION:
@@ -305,7 +305,7 @@ def _as_revision(value: Any, key: str) -> str | None:
         return None
     if isinstance(value, str):
         return value
-    raise InvalidUseCaseDocumentError(
+    raise InvalidPromptDocumentError(
         f"deployment {key} revision must be a string like v2026.09.30-1"
     )
 
@@ -351,8 +351,8 @@ def _enum(value: Any, allowed: tuple[str, ...], default: str, tag: str, warnings
     return text
 
 
-def _decode_use_case(key: str, raw: Mapping[str, Any], warnings: list[str]) -> UseCase:
-    return UseCase(
+def _decode_prompt(key: str, raw: Mapping[str, Any], warnings: list[str]) -> Prompt:
+    return Prompt(
         id=None,
         key=key,
         kind=_enum(raw.get("kind"), _KINDS, "chat", "unknown_kind", warnings),
@@ -363,11 +363,11 @@ def _decode_use_case(key: str, raw: Mapping[str, Any], warnings: list[str]) -> U
 
 
 def _decode_variables(
-    raw_use_case: Mapping[str, Any], warnings: list[str]
+    raw_prompt: Mapping[str, Any], warnings: list[str]
 ) -> list[VariableDefinition]:
-    if "input_schema" in raw_use_case:
-        raise InvalidUseCaseDocumentError("prompt variables must use variables, not input_schema")
-    raw = raw_use_case.get("variables")
+    if "input_schema" in raw_prompt:
+        raise InvalidPromptDocumentError("prompt variables must use variables, not input_schema")
+    raw = raw_prompt.get("variables")
     if not isinstance(raw, list):
         return []
     variables = []
@@ -439,14 +439,14 @@ def _decode_deployments(raw: Any, warnings: list[str]) -> dict[str, Deployment]:
             warnings.append(f"invalid_model_ref: {key}")
         deployments[str(key)] = Deployment(
             id=None,
-            use_case_key=(
-                _as_str(value.get("use_case_key")) or _as_str(value.get("prompt_key")) or str(key)
+            prompt_key=(
+                _as_str(value.get("prompt_key")) or _as_str(value.get("prompt_key")) or str(key)
             ),
             revision=_as_revision(value.get("revision"), str(key)),
             model_id=f"invalid:{key}" if model_id is None else model_id,
             params=stringify_keys(value.get("params")),
             provider_options=stringify_keys(value.get("provider_options")),
-            prompt_pins=pins,
+            template_pins=pins,
             api=_as_str(value.get("api")),
             request_path=_as_str(value.get("request_path")),
         )

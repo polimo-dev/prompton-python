@@ -10,11 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from prompton.config import Config
-from prompton.errors import APIError, UseCaseDocumentUnavailableError
+from prompton.errors import APIError, PromptDocumentUnavailableError
 from prompton.http import HttpResponse, UrllibTransport
-from prompton.snapshot_data import UseCaseDocument
+from prompton.snapshot_data import PromptDocument
 from prompton.store import SnapshotStore
-from prompton.testing import make_use_case_document
+from prompton.testing import make_prompt_document
 
 from .conftest import FakeTransport, json_response, single_prompt_document, transport_error
 
@@ -31,7 +31,7 @@ def snapshot_ok(document: dict, etag: str = ETAG) -> HttpResponse:
 
 @pytest.fixture
 def document() -> dict:
-    return make_use_case_document(
+    return make_prompt_document(
         project="demo",
         environment="production",
         greeting={"messages": [{"role": "user", "content": "hi"}]},
@@ -166,12 +166,12 @@ class TestTenSecondCache:
         assert len(transport.snapshot_requests) == 1
 
     def test_restart_restores_each_key_from_its_own_disk_document(self, tmp_path):
-        greeting = make_use_case_document(
+        greeting = make_prompt_document(
             project="demo",
             environment="production",
             greeting={"messages": [{"role": "user", "content": "hi"}], "model": "provider/model-a"},
         )
-        summarize = make_use_case_document(
+        summarize = make_prompt_document(
             project="demo",
             environment="production",
             summarize={"kind": "text", "text": "summarize", "model": "provider/model-b"},
@@ -205,12 +205,12 @@ class TestTenSecondCache:
         )
 
     def test_late_parse_cannot_commit_after_the_fetch_deadline(self, tmp_path, monkeypatch):
-        initial = make_use_case_document(
+        initial = make_prompt_document(
             project="demo",
             environment="production",
             greeting={"messages": [{"role": "user", "content": "old"}], "model": "provider/old"},
         )
-        update = make_use_case_document(
+        update = make_prompt_document(
             project="demo",
             environment="production",
             greeting={"messages": [{"role": "user", "content": "new"}], "model": "provider/new"},
@@ -220,20 +220,20 @@ class TestTenSecondCache:
         store = build(tmp_path, transport, timeout=5.0)
         store.start()
         initial_raw = json.dumps(initial).encode("utf-8")
-        store.install(UseCaseDocument.from_json(initial_raw), raw=initial_raw)
+        store.install(PromptDocument.from_json(initial_raw), raw=initial_raw)
         with store._lock:
             assert store._entry is not None
             store._entries["greeting"] = store._entry
             store._last_success["greeting"] = time.monotonic() - 10.1
             store._last_attempt["greeting"] = time.monotonic() - 10.1
 
-        original = UseCaseDocument.from_json
+        original = PromptDocument.from_json
 
         def slow_from_json(raw):
             time.sleep(1.05)
             return original(raw)
 
-        monkeypatch.setattr("prompton.store.UseCaseDocument.from_json", slow_from_json)
+        monkeypatch.setattr("prompton.store.PromptDocument.from_json", slow_from_json)
         entry = store.current("greeting")
         assert entry.data.models["openrouter:provider/old"].model_id == "provider/old"
         assert (
@@ -242,12 +242,12 @@ class TestTenSecondCache:
         )
 
     def test_slow_drip_http_body_uses_stale_value_and_cannot_late_install(self, tmp_path):
-        initial = make_use_case_document(
+        initial = make_prompt_document(
             project="demo",
             environment="production",
             greeting={"messages": [{"role": "user", "content": "old"}], "model": "provider/old"},
         )
-        slow = make_use_case_document(
+        slow = make_prompt_document(
             project="demo",
             environment="production",
             greeting={"messages": [{"role": "user", "content": "new"}], "model": "provider/new"},
@@ -285,7 +285,7 @@ class TestTenSecondCache:
             )
             store.start()
             initial_raw = json.dumps(initial).encode("utf-8")
-            store.install(UseCaseDocument.from_json(initial_raw), raw=initial_raw)
+            store.install(PromptDocument.from_json(initial_raw), raw=initial_raw)
             with store._lock:
                 assert store._entry is not None
                 store._entries["greeting"] = store._entry
@@ -307,12 +307,12 @@ class TestTenSecondCache:
             server.server_close()
 
     def test_each_key_keeps_its_own_document_when_models_change(self, tmp_path):
-        greeting = make_use_case_document(
+        greeting = make_prompt_document(
             project="demo",
             environment="production",
             greeting={"messages": [{"role": "user", "content": "hi"}], "model": "provider/model-a"},
         )
-        summarize = make_use_case_document(
+        summarize = make_prompt_document(
             project="demo",
             environment="production",
             summarize={"kind": "text", "text": "summarize", "model": "provider/model-b"},
@@ -533,13 +533,13 @@ class TestServerDown:
         transport.push(transport_error())
         store = build(tmp_path, transport)
         store.start()
-        with pytest.raises(UseCaseDocumentUnavailableError) as error:
+        with pytest.raises(PromptDocumentUnavailableError) as error:
             store.current("greeting")
         assert "unreachable" in str(error.value)
         assert "nothing is cached" in str(error.value)
 
     def test_a_corrupt_or_partial_file_is_ignored_not_raised(self, tmp_path, document):
-        (tmp_path / "snapshot.json").write_text('{"schema_version": 4, "use_ca')
+        (tmp_path / "snapshot.json").write_text('{"schema_version": 5, "use_ca')
         transport = FakeTransport()
         transport.push(snapshot_ok(document))
         store = build(tmp_path, transport)
@@ -591,7 +591,7 @@ class TestScopeGuard:
         transport.push(transport_error())
         store = build(tmp_path, transport, environment="production")
         store.start()
-        with pytest.raises(UseCaseDocumentUnavailableError):
+        with pytest.raises(PromptDocumentUnavailableError):
             store.current()
 
     def test_a_snapshot_for_another_project_is_never_used(self, tmp_path, document):
@@ -601,7 +601,7 @@ class TestScopeGuard:
         transport.push(transport_error())
         store = build(tmp_path, transport)
         store.start()
-        with pytest.raises(UseCaseDocumentUnavailableError):
+        with pytest.raises(PromptDocumentUnavailableError):
             store.current()
 
     def test_a_healthy_server_with_the_wrong_project_says_so(self, tmp_path, document):
@@ -612,7 +612,7 @@ class TestScopeGuard:
         store = build(tmp_path, transport, project="otherproj", disk_cache=False)
         store.start()
 
-        with pytest.raises(UseCaseDocumentUnavailableError) as error:
+        with pytest.raises(PromptDocumentUnavailableError) as error:
             store.current("greeting")
         message = str(error.value)
         assert "unreachable" not in message
@@ -626,7 +626,7 @@ class TestScopeGuard:
         store = build(tmp_path, transport, environment="production", disk_cache=False)
         store.start()
 
-        with pytest.raises(UseCaseDocumentUnavailableError) as error:
+        with pytest.raises(PromptDocumentUnavailableError) as error:
             store.current("greeting")
         assert "'staging'" in str(error.value) and "'production'" in str(error.value)
 
@@ -637,7 +637,7 @@ class TestScopeGuard:
         transport.push(snapshot_ok(missing_environment))
         store = build(tmp_path, transport, project="demo", disk_cache=False)
         store.start()
-        with pytest.raises(UseCaseDocumentUnavailableError) as error:
+        with pytest.raises(PromptDocumentUnavailableError) as error:
             store.current("greeting")
         assert "without an environment" in str(error.value)
 
@@ -647,7 +647,7 @@ class TestScopeGuard:
         transport.push(snapshot_ok(missing_project))
         store = build(tmp_path, transport, project="demo", disk_cache=False)
         store.start()
-        with pytest.raises(UseCaseDocumentUnavailableError) as error:
+        with pytest.raises(PromptDocumentUnavailableError) as error:
             store.current("greeting")
         assert "without a project" in str(error.value)
 
@@ -731,7 +731,7 @@ class TestModes:
         transport = FakeTransport()
         store = SnapshotStore(config, transport)
         store.start()
-        with pytest.raises(UseCaseDocumentUnavailableError, match="load_use_cases"):
+        with pytest.raises(PromptDocumentUnavailableError, match="load_prompts"):
             store.current()
         assert transport.requests == []
 

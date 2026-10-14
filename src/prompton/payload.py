@@ -15,7 +15,7 @@ the network at all. The order matters, because the steps interact:
 5. ``end_user_ref`` hashed when ``hash_end_user`` is set.
 6. the app's ``redact`` hook, last.
 
-Caps, all derived from the use case's ``max_bytes`` (default 262144):
+Caps, all derived from the prompt's ``max_bytes`` (default 262144):
 
 =================================  =============================
 one message ``content``            ``max(max_bytes / 8, 64)``

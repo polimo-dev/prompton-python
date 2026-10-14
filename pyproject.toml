@@ -33,7 +33,7 @@ Source = "https://github.com/polimo-dev/prompton-python"
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
-prompton-use-cases = "prompton.__main__:main"
+prompton-prompts = "prompton.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/prompton"]

@@ -66,29 +66,29 @@ All notable changes to `prompton-sdk` for Python. This project follows
 
 Breaking rename to the final PromptOn runtime vocabulary.
 
-- Replaced the public `resolve()` / `render()` flow with `use_case()` returning `UseCase`, whose
-  `.messages()` and `.text()` methods validate the use-case kind before rendering.
+- Replaced the public `resolve()` / `render()` flow with `prompt()` returning `Prompt`, whose
+  `.messages()` and `.text()` methods validate the prompt kind before rendering.
 - Replaced `Outcome` with `Result`, including `Result.from_openai()` and
   `Result.from_anthropic()` helpers for provider response extraction.
-- Replaced public generation tracking with `UseCase.track(call, ...)` and the context-manager form
-  `with use_case.track(...) as log: ... log.result(result)`.
-- Updated runtime HTTP paths to `GET /api/v1/use-cases`, `POST /api/v1/use-cases/{key}/prompt`,
+- Replaced public generation tracking with `Prompt.track(call, ...)` and the context-manager form
+  `with prompt.track(...) as log: ... log.result(result)`.
+- Updated runtime HTTP paths to `GET /api/v1/prompts`, `POST /api/v1/prompts/{key}/render`,
   and `POST /api/v1/logs` with the `{"logs": [...]}` envelope.
-- Updated public fields to `params`, `provider_options` and `source`, schema version 4, and the
-  default bundle filename `use-cases.production.json`.
-- Renamed conformance fixtures to `use_case.json` and `log_record.json`.
+- Updated public fields to `params`, `provider_options` and `source`, schema version 5, and the
+  default bundle filename `prompts.production.json`.
+- Renamed conformance fixtures to `prompt.json` and `log_record.json`.
 
 ## 0.1.0
 
 Initial release: the PromptOn runtime contract for Python, with no runtime dependencies.
 
-- **Use case lookup** a use case to its pinned prompt version, model and parameters, entirely locally from
-  a cached use-case document. Prompt name is the only selection axis, and an unpinned name is an error
+- **Prompt lookup** a prompt to its pinned prompt version, model and parameters, entirely locally from
+  a cached prompt document. Template name is the only selection axis, and an unpinned name is an error
   rather than a silent fall back to `default`.
 - **Rendering** the pinned prompt with the Liquid subset PromptOn allows - `for`, `if`/`elsif`/`else`,
   `unless`, `assign`, and the `size`, `join` and `default` filters - including Liquid's blank-body
   rule and the missing-variable semantics the contract specifies. Plus `lint` and `variables_of`.
-- **Use-case document store** with the mandated caching rules: a 10-second memory cache, `If-None-Match`
+- **Prompt document store** with the mandated caching rules: a 10-second memory cache, `If-None-Match`
   revalidation in a poll thread or stale-while-revalidate, `Retry-After` on 429, ×2 backoff to five
   minutes on 5xx and transport failures, and three tiers - memory, an atomically written disk cache
   with a sidecar, and an optional committed bundle. No database, no Redis, no coordination between
@@ -112,8 +112,8 @@ Initial release: the PromptOn runtime contract for Python, with no runtime depen
   fallback rules. It is a network call, so it makes none in test mode, in offline mode or without
   an API key: it serves a cached answer if it has one and otherwise says why it cannot.
 - **Test mode** (no HTTP, no disk cache or bundle, logs captured for assertions) and **offline
-  mode** (disk and bundle only), plus `prompton.testing.make_use_case_document` for building a use-case document in a
+  mode** (disk and bundle only), plus `prompton.testing.make_prompt_document` for building a prompt document in a
   test. A test-mode client starts empty, so it behaves the same on a developer's machine as in CI.
-- **`python -m prompton export`** to fetch use cases in CI and commit it as a bundle.
+- **`python -m prompton export`** to fetch prompts in CI and commit it as a bundle.
 - The cross-language conformance suite from the reference implementation runs in this SDK's tests:
-  template rendering, use-case lookup, truncation, `stop_kind` and the golden monitoring-log records.
+  template rendering, prompt lookup, truncation, `stop_kind` and the golden monitoring-log records.

@@ -22,11 +22,11 @@ from prompton.config import Config
 from prompton.errors import TransportError
 from prompton.http import HttpResponse
 from prompton.store import SnapshotStore
-from prompton.testing import make_use_case_document
+from prompton.testing import make_prompt_document
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "fork"), reason="fork() is POSIX only")
 
-DOCUMENT = make_use_case_document(
+DOCUMENT = make_prompt_document(
     project="demo",
     environment="production",
     greeting={"messages": [{"role": "user", "content": "hi"}]},
@@ -115,7 +115,7 @@ def test_a_forked_child_still_sends_its_monitoring_logs(tmp_path):
         buffer.enqueue(
             {
                 "id": "0198f2a1-1111-7000-8000-0000000000ff",
-                "use_case": "greeting",
+                "prompt_key": "greeting",
                 "model": "openai/gpt-4o-mini",
                 "status": "ok",
                 "started_at": "2026-09-04T09:00:00.000000Z",

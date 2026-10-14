@@ -3,8 +3,8 @@
 The server runs the same algorithm as :mod:`prompton.resolver`, so this is the quickest way to
 prove a deployment is live and to see exactly how a prompt renders. It is *not* the hot path: it
 costs a request per call. Ask for the raw template once (no ``variables``), cache it for the
-same ten seconds the use-case document uses, and render locally - which is what
-:meth:`UseCasePromptClient.fill` does for you.
+same ten seconds the prompt document uses, and render locally - which is what
+:meth:`PromptRenderClient.fill` does for you.
 
 When the server rate-limits, fails or cannot be reached, a cached answer is served instead.
 """
@@ -21,26 +21,26 @@ from typing import Any
 from urllib.parse import quote
 
 from .config import Config
-from .errors import APIError, ConfigurationError, TransportError, UseCaseDocumentUnavailableError
+from .errors import APIError, ConfigurationError, PromptDocumentUnavailableError, TransportError
 from .http import Transport, build_headers, parse_api_error, retry_after_seconds
-from .snapshot_data import InvalidUseCaseDocumentError
+from .snapshot_data import InvalidPromptDocumentError
 from .template import render as render_template
 from .template import render_messages
 
-__all__ = ["FilledPrompt", "UseCasePromptClient"]
+__all__ = ["PromptRenderClient", "RenderedPrompt"]
 
 log = logging.getLogger("prompton")
 
 
 @dataclass(frozen=True)
-class FilledPrompt:
+class RenderedPrompt:
     """The body of a ``POST /prompts/{key}/render`` answer, with the prompt rendered."""
 
     key: str
     kind: str
     deployment: dict[str, Any]
-    prompt: str | None
-    prompt_names: list[str]
+    template: str | None
+    template_names: list[str]
     model: str | None
     model_id: str | None
     provider: str | None
@@ -54,21 +54,21 @@ class FilledPrompt:
     source: str | None = None
 
     @classmethod
-    def from_body(cls, body: Mapping[str, Any]) -> FilledPrompt:
+    def from_body(cls, body: Mapping[str, Any]) -> RenderedPrompt:
         deployment = body.get("deployment") or {}
         if not isinstance(deployment, Mapping):
-            raise InvalidUseCaseDocumentError("prompt render deployment must be an object")
+            raise InvalidPromptDocumentError("prompt render deployment must be an object")
         revision = deployment.get("revision")
         if revision is not None and not isinstance(revision, str):
-            raise InvalidUseCaseDocumentError(
+            raise InvalidPromptDocumentError(
                 "prompt render deployment revision must be a string like v2026.09.30-1"
             )
         return cls(
             key=body.get("key", ""),
             kind=body.get("kind", "chat"),
             deployment=dict(deployment),
-            prompt=body.get("template", body.get("prompt")),
-            prompt_names=list(body.get("template_names", body.get("prompt_names", [])) or []),
+            template=body.get("template"),
+            template_names=list(body.get("template_names") or []),
             model=body.get("model"),
             model_id=body.get("model_id"),
             provider=body.get("provider"),
@@ -82,24 +82,24 @@ class FilledPrompt:
             source=body.get("source"),
         )
 
-    def rendered(self, variables: Mapping[str, Any] | None) -> FilledPrompt:
+    def rendered(self, variables: Mapping[str, Any] | None) -> RenderedPrompt:
         """This answer with its raw templates rendered against ``variables``."""
         if variables is None:
             return self
         messages = render_messages(self.messages, variables) if self.messages is not None else None
         text = render_template(self.text, variables) if self.text is not None else None
-        return FilledPrompt(
+        return RenderedPrompt(
             **{**self.__dict__, "messages": messages, "text": text},
         )
 
 
 @dataclass
 class _CacheEntry:
-    value: FilledPrompt
+    value: RenderedPrompt
     at: float
 
 
-class UseCasePromptClient:
+class PromptRenderClient:
     """Calls ``POST /prompts/{key}/render``, caching the raw answer for the configured TTL."""
 
     def __init__(self, config: Config, transport: Transport) -> None:
@@ -112,16 +112,16 @@ class UseCasePromptClient:
 
     def fill(
         self,
-        use_case: str,
+        prompt_key: str,
         *,
-        prompt: str | None = None,
+        template: str | None = None,
         variables: Mapping[str, Any] | None = None,
         environment: str | None = None,
         render_locally: bool = True,
-    ) -> FilledPrompt:
-        """Fetch the prompt endpoint answer and render locally.
+    ) -> RenderedPrompt:
+        """Fetch the render endpoint answer and render locally.
 
-        The raw answer (no ``variables`` sent) is cached per use case, prompt and environment for
+        The raw answer (no ``variables`` sent) is cached per prompt, template and environment for
         ``cache_ttl`` seconds, so repeated calls with different variables cost one request.
 
         Pass ``render_locally=False`` to send the variables and let the server render them. That
@@ -133,11 +133,11 @@ class UseCasePromptClient:
         API key it serves a cached answer if there is one and otherwise says why it cannot.
         """
         environment = environment or self._config.environment
-        key = (use_case, prompt or "default", environment)
+        key = (prompt_key, template or "default", environment)
         if not self._config.remote_enabled:
             return self._without_remote(key, variables)
         if not render_locally:
-            return self._request(use_case, prompt, environment, variables)
+            return self._request(prompt_key, template, environment, variables)
 
         with self._lock:
             entry = self._cache.get(key)
@@ -148,12 +148,12 @@ class UseCasePromptClient:
             return entry.value.rendered(variables)
 
         try:
-            answer = self._request(use_case, prompt, environment)
+            answer = self._request(prompt_key, template, environment)
         except TransportError as error:
             self._note_failure(error)
             if entry is not None:
                 log.warning(
-                    "prompton: prompt endpoint failed, serving the cached answer: %s", error
+                    "prompton: render endpoint failed, serving the cached answer: %s", error
                 )
                 return entry.value.rendered(variables)
             raise
@@ -161,7 +161,7 @@ class UseCasePromptClient:
             # a retryable status already scheduled its own pause in _request
             if entry is not None:
                 log.warning(
-                    "prompton: prompt endpoint failed, serving the cached answer: %s", error
+                    "prompton: render endpoint failed, serving the cached answer: %s", error
                 )
                 return entry.value.rendered(variables)
             raise
@@ -174,43 +174,43 @@ class UseCasePromptClient:
 
     def _without_remote(
         self, key: tuple[str, str, str], variables: Mapping[str, Any] | None
-    ) -> FilledPrompt:
+    ) -> RenderedPrompt:
         """No remote calls are allowed: serve the cached answer, or say why there is none."""
         if self._config.mode == "test":
             raise ConfigurationError(
-                "filled_prompt() is a network call and test mode makes none; load a document "
-                "with load_use_cases() and use use_case() instead"
+                "render_prompt() is a network call and test mode makes none; load a document "
+                "with load_prompts() and use prompt() instead"
             )
         with self._lock:
             entry = self._cache.get(key)
         if entry is not None:
             return entry.value.rendered(variables)
         if self._config.mode == "offline":
-            raise UseCaseDocumentUnavailableError(
-                "offline mode makes no remote calls, and no use-case prompt answer is cached for "
-                f"{key[0]!r}; use use_case() against the disk cache or the bundle instead"
+            raise PromptDocumentUnavailableError(
+                "offline mode makes no remote calls, and no prompt render answer is cached for "
+                f"{key[0]!r}; use prompt() against the disk cache or the bundle instead"
             )
-        raise UseCaseDocumentUnavailableError(
+        raise PromptDocumentUnavailableError(
             "no API key configured: set PTN_API_KEY or pass api_key= to use the network"
         )
 
     def _request(
         self,
-        use_case: str,
-        prompt: str | None,
+        prompt_key: str,
+        template: str | None,
         environment: str,
         variables: Mapping[str, Any] | None = None,
-    ) -> FilledPrompt:
+    ) -> RenderedPrompt:
         payload: dict[str, Any] = {"environment": environment}
-        if prompt is not None:
-            payload["template"] = prompt
+        if template is not None:
+            payload["template"] = template
         if variables is not None:
             payload["variables"] = dict(variables)
         headers = build_headers(self._config.api_key, self._config.user_agent)
         headers["content-type"] = "application/json"
         response = self._transport.request(
             "POST",
-            f"{self._config.base_url}/prompts/{quote(use_case, safe='')}/render",
+            f"{self._config.base_url}/prompts/{quote(prompt_key, safe='')}/render",
             headers=headers,
             body=json.dumps(payload).encode("utf-8"),
             timeout=self._config.timeout,
@@ -221,10 +221,10 @@ class UseCasePromptClient:
                 raise APIError(
                     response.status, message="the prompt render answer was not an object"
                 )
-            return FilledPrompt.from_body(body)
+            return RenderedPrompt.from_body(body)
         error = parse_api_error(response)
         if response.status == 404 and "key" not in error.details:
-            error.details["key"] = use_case
+            error.details["key"] = prompt_key
         if response.status == 429 or response.status >= 500:
             self._note_failure(error, retry_after_seconds(response))
         raise error

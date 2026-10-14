@@ -5,10 +5,10 @@ Skipped unless ``PTN_API_KEY`` is set::
     PTN_HOST=http://localhost:4000 PTN_API_KEY=ptn_sdkfixture_... \\
         python -m pytest tests/test_integration_live.py -v
 
-They expect the ``sdkfixture`` project: use cases ``greeting`` (chat, prompt names ``default`` and
+They expect the ``sdkfixture`` project: prompts ``greeting`` (chat, prompt names ``default`` and
 ``ko``), ``summarize`` (text) and ``embed`` (embedding), in the ``production`` and ``staging``
 environments. The point of these tests is the one thing a stub cannot prove: that **local
-resolution agrees with the server's own prompt endpoint**, byte for byte.
+resolution agrees with the server's own render endpoint**, byte for byte.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import os
 import pytest
 
 from prompton import PromptOn
-from prompton.errors import APIError, MissingVariableError, UnknownPromptError, UnknownUseCaseError
+from prompton.errors import APIError, MissingVariableError, UnknownPromptError, UnknownTemplateError
 from prompton.uuidv7 import uuid7
 
 pytestmark = pytest.mark.skipif(
@@ -41,20 +41,20 @@ def client(tmp_path_factory):
 
 
 class TestSnapshot:
-    def test_the_snapshot_fetch_carries_an_etag_and_the_expected_use_cases(self, client):
+    def test_the_snapshot_fetch_carries_an_etag_and_the_expected_prompts(self, client):
         assert client._store.refresh_all(raise_errors=True, force=True) is True
-        info = client.use_cases_info()
+        info = client.prompts_info()
         assert info["source"] == "remote"
         assert info["etag"].startswith('"sha256-')
         assert info["environment"] == "production"
-        snapshot = client.use_cases()
-        assert {"greeting", "summarize", "embed"} <= set(snapshot.use_cases)
+        snapshot = client.prompts()
+        assert {"greeting", "summarize", "embed"} <= set(snapshot.prompts)
 
     def test_a_repoll_answers_304_and_changes_nothing(self, client):
         client.prompt("greeting")
-        before = client.use_cases_info()["etag"]
+        before = client.prompts_info()["etag"]
         assert client.refresh(key="greeting") is False, "an unchanged snapshot must answer 304"
-        assert client.use_cases_info()["etag"] == before
+        assert client.prompts_info()["etag"] == before
 
     def test_the_disk_cache_is_written_and_reused_by_a_cold_client(self, client, tmp_path):
         client.prompt("greeting")
@@ -69,16 +69,16 @@ class TestSnapshot:
             timeout=1.0,
         )
         try:
-            assert cold.use_case("greeting").source == "disk"
+            assert cold.prompt("greeting").source == "disk"
         finally:
             cold.close(timeout=1.0)
 
 
 class TestLocalResolutionMatchesTheServer:
-    def _compare(self, client, use_case, prompt=None, variables=None, environment=None):
-        local = client.use_case(use_case, prompt)
-        remote = client.filled_prompt(
-            use_case, prompt=prompt, variables=variables, environment=environment
+    def _compare(self, client, prompt_key, template=None, variables=None, environment=None):
+        local = client.prompt(prompt_key, template)
+        remote = client.render_prompt(
+            prompt_key, template=template, variables=variables, environment=environment
         )
         assert local.deployment["id"] == remote.deployment["id"]
         assert local.deployment["revision"] == remote.deployment["revision"]
@@ -87,8 +87,8 @@ class TestLocalResolutionMatchesTheServer:
         assert local.provider == remote.provider
         assert local.params == remote.params
         assert local.provider_options == remote.provider_options
-        assert local.prompt == remote.prompt
-        assert list(local.prompt_names) == remote.prompt_names
+        assert local.template == remote.template
+        assert list(local.template_names) == remote.template_names
         assert local.prompt_version == remote.prompt_version
         assert local.kind == remote.kind
         return local, remote
@@ -97,11 +97,15 @@ class TestLocalResolutionMatchesTheServer:
         local, remote = self._compare(client, "greeting", variables={"name": "Ada"})
         assert local.messages({"name": "Ada"}) == remote.messages
 
-    def test_greeting_ko(self, client):
-        local, remote = self._compare(client, "greeting", prompt="ko", variables={"name": "아다"})
-        assert local.messages({"name": "아다"}) == remote.messages
+    def test_named_template_is_not_enabled_on_the_active_server(self, client):
+        with pytest.raises(UnknownTemplateError):
+            client.prompt("greeting", "ko")
+        with pytest.raises(APIError) as error:
+            client.render_prompt("greeting", template="ko", variables={"name": "아다"})
+        assert error.value.status == 400
+        assert error.value.code == "invalid_request"
 
-    def test_summarize_is_a_text_use_case(self, client):
+    def test_summarize_is_a_text_prompt(self, client):
         local, remote = self._compare(
             client, "summarize", variables={"items": ["alpha", "beta", "gamma"]}
         )
@@ -111,48 +115,48 @@ class TestLocalResolutionMatchesTheServer:
     def test_embed_resolves_the_model_only(self, client):
         local, remote = self._compare(client, "embed")
         assert local.kind == "embedding"
-        assert local.prompt is None and remote.prompt is None
+        assert local.template is None and remote.template is None
         assert remote.prompt_version is None
-        assert remote.prompt_names == []
+        assert remote.template_names == []
 
     def test_the_raw_template_comes_back_unrendered_without_variables(self, client):
-        remote = client.filled_prompt("greeting")
+        remote = client.render_prompt("greeting")
         assert "{{ name }}" in remote.messages[-1]["content"]
 
 
 class TestErrorsMatchTheServer:
-    def test_an_unknown_use_case(self, client):
-        with pytest.raises(UnknownUseCaseError):
-            client.use_case("does_not_exist")
+    def test_an_unknown_template_key(self, client):
+        with pytest.raises(UnknownPromptError):
+            client.prompt("does_not_exist")
         with pytest.raises(APIError) as error:
-            client.filled_prompt("does_not_exist")
+            client.render_prompt("does_not_exist")
         assert error.value.status == 404
         assert error.value.details["key"] == "does_not_exist"
 
     def test_an_unpinned_prompt_name(self, client):
-        with pytest.raises(UnknownPromptError) as local_error:
-            client.use_case("greeting", "fr")
+        with pytest.raises(UnknownTemplateError) as local_error:
+            client.prompt("greeting", "fr")
         with pytest.raises(APIError) as remote_error:
-            client.filled_prompt("greeting", prompt="fr")
-        assert remote_error.value.status == 404
-        assert remote_error.value.details["reason"] == "unknown_prompt"
-        assert local_error.value.prompt_names == remote_error.value.details["prompt_names"]
+            client.render_prompt("greeting", template="fr")
+        assert remote_error.value.status == 400
+        assert remote_error.value.code == "invalid_request"
+        assert local_error.value.template_names == ["default", "ko"]
 
     def test_a_missing_variable(self, client):
         with pytest.raises(MissingVariableError) as local_error:
-            client.use_case("greeting").messages({})
-        # filled_prompt renders locally, so it fails the same way...
+            client.prompt("greeting").messages({})
+        # render_prompt renders locally, so it fails the same way...
         with pytest.raises(MissingVariableError):
-            client.filled_prompt("greeting", variables={})
+            client.render_prompt("greeting", variables={})
         # ...and the server itself answers 400 with the variable it wanted
         with pytest.raises(APIError) as remote_error:
-            client.filled_prompt("greeting", variables={}, render_locally=False)
+            client.render_prompt("greeting", variables={}, render_locally=False)
         assert remote_error.value.status == 400
         assert local_error.value.variable == remote_error.value.details["missing_variable"]
 
     def test_an_unknown_environment(self, client):
         with pytest.raises(APIError) as error:
-            client.filled_prompt("greeting", environment="nope")
+            client.render_prompt("greeting", environment="nope")
         assert error.value.status == 404
         assert error.value.details["environment"] == "nope"
 
@@ -185,19 +189,19 @@ class TestEnvironments:
         )
         try:
             assert staging._store.refresh_all(raise_errors=True, force=True) is True
-            assert staging.use_cases().environment == "staging"
-            local = staging.use_case("greeting")
-            remote = staging.filled_prompt("greeting", variables={"name": "Ada"})
+            assert staging.prompts().environment == "staging"
+            local = staging.prompt("greeting")
+            remote = staging.render_prompt("greeting", variables={"name": "Ada"})
             assert local.deployment["id"] == remote.deployment["id"]
-            assert local.deployment["id"] != client.use_case("greeting").deployment["id"]
+            assert local.deployment["id"] != client.prompt("greeting").deployment["id"]
         finally:
             staging.close(timeout=1.0)
 
 
 class TestGenerations:
     def test_a_batch_is_accepted_and_a_resend_is_absorbed_as_duplicates(self, client):
-        use_case = client.use_case("greeting")
-        messages = use_case.messages({"name": "Ada"})
+        prompt_key = client.prompt("greeting")
+        messages = prompt_key.messages({"name": "Ada"})
         ids = [uuid7(), uuid7()]
 
         client.log(
@@ -220,7 +224,7 @@ class TestGenerations:
                 "end_user_ref": "user-42",
                 "metadata": {"source": "prompton-python integration test"},
             },
-            use_case=use_case,
+            prompt=prompt_key,
         )
         client.log(
             {
@@ -235,7 +239,7 @@ class TestGenerations:
                 "trace_id": "sdk-python:2",
                 "sequence": 2,
             },
-            use_case=use_case,
+            prompt=prompt_key,
         )
 
         stats = client.flush(timeout=15)
@@ -251,29 +255,29 @@ class TestGenerations:
                     "status": status,
                     "error": None if status == "ok" else {"kind": "rate_limited"},
                 },
-                use_case=use_case,
+                prompt=prompt_key,
             )
         stats = client.flush(timeout=15)
         assert stats.duplicates == before + 2
         assert stats.rejected == 0
 
     def test_a_malformed_record_is_rejected_by_index_and_the_rest_is_kept(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
         before = client.stats.rejected
-        client.log({"id": "not-a-uuid", "status": "ok"}, use_case=use_case)
-        client.log({"id": uuid7(), "status": "ok"}, use_case=use_case)
+        client.log({"id": "not-a-uuid", "status": "ok"}, prompt=prompt_key)
+        client.log({"id": uuid7(), "status": "ok"}, prompt=prompt_key)
         stats = client.flush(timeout=15)
         assert stats.rejected == before + 1
         assert stats.accepted >= 1
 
     def test_the_wrapper_sends_a_complete_record(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
         before = client.stats.accepted
         rejected_before = client.stats.rejected
-        use_case.track(
+        prompt_key.track(
             lambda: "Hello, Ada!",
             variables={"name": "Ada"},
-            input_messages=use_case.messages({"name": "Ada"}),
+            input_messages=prompt_key.messages({"name": "Ada"}),
             trace_id="sdk-python:wrapper",
         )
         stats = client.flush(timeout=15)

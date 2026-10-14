@@ -1,6 +1,6 @@
 """Shallow merge for parameter maps.
 
-``params = use_case.default_params <- deployment.params`` and
+``params = prompt_key.default_params <- deployment.params`` and
 ``provider_options = model.provider_options <- deployment.provider_options``. Both are
 **shallow** merges where the right side wins: a nested map on the right replaces the left side
 whole. An override value of ``None`` is kept as ``None``, not deleted - apps rely on sending

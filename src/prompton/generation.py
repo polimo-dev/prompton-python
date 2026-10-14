@@ -1,6 +1,6 @@
 """Building a monitoring-log record, and the wrapper that times a provider call.
 
-``build_record`` turns a use-case lookup result, the call metadata and the provider result
+``build_record`` turns a prompt lookup result, the call metadata and the provider result
 into the exact JSON shape ``POST /api/v1/logs`` accepts. Top-level keys whose value is
 ``None`` are omitted; the nulls inside ``usage`` are sent as-is and accepted.
 """
@@ -150,9 +150,9 @@ def build_record(
 
     record: dict[str, Any] = {
         "id": meta.id or uuid7(),
-        "prompt_key": resolution.use_case if resolution else None,
+        "prompt_key": resolution.prompt_key if resolution else None,
         "deployment_revision": resolution.deployment_revision if resolution else None,
-        "template": resolution.prompt if resolution else None,
+        "template": resolution.template if resolution else None,
         "prompt_version_number": resolution.prompt_version_number if resolution else None,
         "source": resolution.source if resolution else "manual",
         "context": stringify_keys(meta.context),

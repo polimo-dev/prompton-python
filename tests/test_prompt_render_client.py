@@ -1,13 +1,13 @@
-"""The use-case prompt client: same caching rules, same "serve the last answer" behaviour."""
+"""The prompt render client: same caching rules, same "serve the last answer" behaviour."""
 
 from __future__ import annotations
 
 import pytest
 
 from prompton.config import Config
-from prompton.errors import APIError, ConfigurationError, UseCaseDocumentUnavailableError
-from prompton.snapshot_data import InvalidUseCaseDocumentError
-from prompton.use_case_prompt_client import UseCasePromptClient
+from prompton.errors import APIError, ConfigurationError, PromptDocumentUnavailableError
+from prompton.prompt_render_client import PromptRenderClient
+from prompton.snapshot_data import InvalidPromptDocumentError
 
 from .conftest import FakeTransport, json_response, transport_error
 
@@ -33,7 +33,7 @@ ANSWER = {
 }
 
 
-def build(transport, **options) -> UseCasePromptClient:
+def build(transport, **options) -> PromptRenderClient:
     settings = {
         "api_key": "ptn_demo_key",
         "host": "http://localhost:4000",
@@ -41,7 +41,7 @@ def build(transport, **options) -> UseCasePromptClient:
         "cache_ttl": 10.0,
     }
     settings.update(options)
-    return UseCasePromptClient(Config.build(**settings), transport)
+    return PromptRenderClient(Config.build(**settings), transport)
 
 
 def test_the_raw_answer_is_fetched_once_and_rendered_locally():
@@ -60,11 +60,11 @@ def test_the_raw_answer_is_fetched_once_and_rendered_locally():
     assert transport.requests[0]["body"] == {"environment": "production"}
 
 
-def test_the_cache_is_keyed_by_use_case_prompt_and_environment():
+def test_the_cache_is_keyed_by_prompt_key_template_and_environment():
     transport = FakeTransport(lambda call: json_response(200, ANSWER))
     client = build(transport)
     client.fill("greeting")
-    client.fill("greeting", prompt="ko")
+    client.fill("greeting", template="ko")
     client.fill("greeting", environment="staging")
     client.fill("greeting")
     assert len(transport.requests) == 3
@@ -114,7 +114,7 @@ def test_numeric_deployment_revision_in_prompt_render_response_is_rejected():
     transport = FakeTransport(lambda call: json_response(200, answer))
     client = build(transport)
 
-    with pytest.raises(InvalidUseCaseDocumentError, match="revision must be a string"):
+    with pytest.raises(InvalidPromptDocumentError, match="revision must be a string"):
         client.fill("greeting")
 
 
@@ -131,14 +131,14 @@ class TestNoRemoteCallsAreEverMade:
     def test_offline_mode_makes_no_request_at_all(self):
         transport = FakeTransport(lambda call: json_response(200, ANSWER))
         client = build(transport, mode="offline")
-        with pytest.raises(UseCaseDocumentUnavailableError, match="offline"):
+        with pytest.raises(PromptDocumentUnavailableError, match="offline"):
             client.fill("greeting")
         assert transport.requests == []
 
     def test_without_an_api_key_no_unauthenticated_request_goes_out(self):
         transport = FakeTransport(lambda call: json_response(200, ANSWER))
         client = build(transport, api_key=None)
-        with pytest.raises(UseCaseDocumentUnavailableError, match="PTN_API_KEY"):
+        with pytest.raises(PromptDocumentUnavailableError, match="PTN_API_KEY"):
             client.fill("greeting")
         assert transport.requests == []
 
@@ -155,12 +155,12 @@ class TestNoRemoteCallsAreEverMade:
     def test_render_locally_false_is_refused_too(self):
         transport = FakeTransport(lambda call: json_response(200, ANSWER))
         client = build(transport, mode="offline")
-        with pytest.raises(UseCaseDocumentUnavailableError):
+        with pytest.raises(PromptDocumentUnavailableError):
             client.fill("greeting", variables={"name": "Ada"}, render_locally=False)
         assert transport.requests == []
 
 
-def test_a_text_use_case_renders_the_text_field():
+def test_a_text_prompt_key_renders_the_text_field():
     answer = dict(ANSWER)
     answer.pop("messages")
     answer["kind"] = "text"

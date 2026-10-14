@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from prompton.resolver import resolve
-from prompton.snapshot_data import InvalidUseCaseDocumentError, UseCaseDocument
+from prompton.snapshot_data import InvalidPromptDocumentError, PromptDocument
 from prompton.template import render, render_messages
 
 ROUNDTRIP = Path(__file__).with_name("fixtures") / "schema1"
@@ -28,22 +28,22 @@ def render_value(value: Any, variables: dict[str, Any]) -> Any:
 
 
 def test_real_schema1_index_is_rejected_as_configuration() -> None:
-    with pytest.raises(InvalidUseCaseDocumentError, match="index responses are discovery only"):
-        UseCaseDocument.from_mapping(fixture("index.json"))
+    with pytest.raises(InvalidPromptDocumentError, match="index responses are discovery only"):
+        PromptDocument.from_mapping(fixture("index.json"))
 
 
 def test_real_chat_detail_decodes_and_renders_like_the_server() -> None:
     detail = fixture("chat-detail.json")
     variables = fixture("chat-variables.json")
     rendered = fixture("chat-render.json")
-    snapshot = UseCaseDocument.from_mapping(detail)
+    snapshot = PromptDocument.from_mapping(detail)
     assert {
         "name": "question",
         "type": "string",
         "required": True,
         "description": "Question to answer",
         "example": "refund",
-    } in [variable.__dict__ for variable in snapshot.use_cases["support_reply"].variables]
+    } in [variable.__dict__ for variable in snapshot.prompts["support_reply"].variables]
     resolution = resolve(snapshot, rendered["key"])
 
     assert (
@@ -59,14 +59,14 @@ def test_real_decision_detail_decodes_and_renders_like_the_server() -> None:
     detail = fixture("decision-detail.json")
     variables = fixture("decision-variables.json")
     rendered = fixture("decision-render.json")
-    snapshot = UseCaseDocument.from_mapping(detail)
+    snapshot = PromptDocument.from_mapping(detail)
     assert {
         "name": "ticket",
         "type": "string",
         "required": True,
         "description": "Ticket summary",
         "example": "refund",
-    } in [variable.__dict__ for variable in snapshot.use_cases["decision_triage"].variables]
+    } in [variable.__dict__ for variable in snapshot.prompts["decision_triage"].variables]
     resolution = resolve(snapshot, rendered["key"])
 
     assert resolution.kind == "decision"

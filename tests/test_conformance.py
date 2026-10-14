@@ -1,7 +1,7 @@
 """The cross-language conformance suite, replayed through this SDK.
 
 ``tests/conformance/*.json`` is copied verbatim from the reference implementation. When two SDKs
-disagree about how a prompt renders, which model a use-case document selects, or how a monitoring log is
+disagree about how a prompt renders, which model a prompt document selects, or how a monitoring log is
 truncated, an app that talks to PromptOn from two languages gets two different answers. These cases
 are what prevents that, so every one of them runs.
 """
@@ -12,18 +12,18 @@ from typing import Any
 
 import pytest
 
-from prompton import VERSION, PromptOn, UseCase, generation, payload, resolver, stop_kind, template
+from prompton import VERSION, Prompt, PromptOn, generation, payload, resolver, stop_kind, template
 from prompton.errors import (
     MissingVariableError,
     ProviderError,
     RenderError,
     TemplateSyntaxError,
     UnknownPromptError,
-    UnknownUseCaseError,
+    UnknownTemplateError,
     UnresolvedError,
 )
 from prompton.generation import CallMeta, Result, build_record
-from prompton.snapshot_data import UseCaseDocument
+from prompton.snapshot_data import PromptDocument
 
 from .conftest import load_conformance
 
@@ -93,7 +93,7 @@ def test_template_allowed_sets_match_the_contract() -> None:
     assert sorted(template.ALLOWED_FILTERS) == sorted(TEMPLATE["allowed_filters"])
 
 
-SNAPSHOTS = {name: UseCaseDocument.from_mapping(doc) for name, doc in RESOLVE["documents"].items()}
+SNAPSHOTS = {name: PromptDocument.from_mapping(doc) for name, doc in RESOLVE["documents"].items()}
 
 
 def _lookup_result(case: dict[str, Any]) -> dict[str, Any]:
@@ -101,23 +101,23 @@ def _lookup_result(case: dict[str, Any]) -> dict[str, Any]:
     try:
         resolution = resolver.resolve(
             snapshot,
-            case.get("prompt_key", case.get("use_case")),
+            case.get("prompt_key", case.get("prompt")),
             case.get("template", case.get("prompt")),
         )
-    except UnknownUseCaseError as error:
-        return {"error": "unknown_prompt", "key": error.use_case}
+    except UnknownPromptError as error:
+        return {"error": "unknown_prompt", "key": error.prompt_key}
     except UnresolvedError:
         return {"error": "unresolved"}
-    except UnknownPromptError as error:
+    except UnknownTemplateError as error:
         return {
             "error": "unknown_template",
-            "key": error.use_case,
-            "template": error.prompt,
-            "template_names": error.prompt_names,
+            "key": error.prompt_key,
+            "template": error.template,
+            "template_names": error.template_names,
         }
 
     got: dict[str, Any] = {
-        "key": resolution.use_case,
+        "key": resolution.prompt_key,
         "source": resolution.source,
         "kind": resolution.kind,
         "deployment_id": resolution.deployment_id,
@@ -125,8 +125,8 @@ def _lookup_result(case: dict[str, Any]) -> dict[str, Any]:
         "model": resolution.model,
         "model_id": resolution.model_id,
         "provider": resolution.provider,
-        "template": resolution.prompt,
-        "template_names": list(resolution.prompt_names),
+        "template": resolution.template,
+        "template_names": list(resolution.template_names),
         "prompt_version": resolution.prompt_version,
         "params": resolution.params,
         "provider_options": resolution.provider_options,
@@ -193,9 +193,9 @@ def test_log_record_shape_matches_the_golden_chat_success() -> None:
     """Rebuild the golden ``chat/success`` record and compare it field for field."""
     golden = _golden("chat/success")
     resolution = resolver.Resolution(
-        use_case="greeting",
+        prompt_key="greeting",
         kind="chat",
-        prompt="default",
+        template="default",
         deployment_id=None,
         deployment_revision=golden["deployment_revision"],
         prompt_version_id=None,
@@ -244,9 +244,9 @@ def test_log_record_shape_matches_the_golden_chat_success() -> None:
 def test_log_record_error_without_output() -> None:
     golden = _golden("chat/error_without_output")
     resolution = resolver.Resolution(
-        use_case="greeting",
+        prompt_key="greeting",
         kind="chat",
-        prompt="default",
+        template="default",
         deployment_id=None,
         deployment_revision=golden["deployment_revision"],
         prompt_version_id=None,
@@ -281,9 +281,9 @@ def test_log_record_error_with_usage_preserved() -> None:
     """A parse failure after the provider answered: the usage and the text are kept."""
     golden = _golden("chat/error_with_usage_preserved")
     resolution = resolver.Resolution(
-        use_case="greeting",
+        prompt_key="greeting",
         kind="chat",
-        prompt="default",
+        template="default",
         deployment_id=None,
         deployment_revision=golden["deployment_revision"],
         prompt_version_id=None,
@@ -321,12 +321,12 @@ def test_log_record_error_with_usage_preserved() -> None:
 
 
 def test_log_record_embedding_success() -> None:
-    """An embedding use case: no prompt, no prompt version, no output."""
+    """An embedding prompt: no prompt, no prompt version, no output."""
     golden = _golden("embedding/success")
     resolution = resolver.Resolution(
-        use_case="embed",
+        prompt_key="embed",
         kind="embedding",
-        prompt=None,
+        template=None,
         deployment_id=None,
         deployment_revision=golden["deployment_revision"],
         prompt_version_id=None,
@@ -365,9 +365,9 @@ def test_log_record_manual_log_with_input_text() -> None:
     """The hand-built record: ``log()`` fills in the evidence and touches nothing else."""
     golden = _golden("text/manual_log_with_input_text")
     resolution = resolver.Resolution(
-        use_case="summarize",
+        prompt_key="summarize",
         kind="text",
-        prompt="default",
+        template="default",
         deployment_id=None,
         deployment_revision=golden["deployment_revision"],
         prompt_version_id=None,
@@ -379,7 +379,7 @@ def test_log_record_manual_log_with_input_text() -> None:
         source="bundle",
     )
     with PromptOn(mode="test", api_key=None) as client:
-        use_case = UseCase(client, resolution)
+        prompt = Prompt(client, resolution)
         client.log(
             {
                 "id": golden["id"],
@@ -392,7 +392,7 @@ def test_log_record_manual_log_with_input_text() -> None:
                 "latency_ms": golden["latency_ms"],
                 "usage": golden["usage"],
             },
-            use_case=use_case,
+            prompt=prompt,
         )
         [record] = client.captured
     record.pop("sdk")

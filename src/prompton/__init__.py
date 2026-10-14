@@ -1,25 +1,25 @@
 """PromptOn SDK for Python.
 
-PromptOn is the control plane for your app's LLM prompts. For each use case and environment it
-holds one **pin**: a prompt version, one model and its parameters. Your app fetches use cases for
+PromptOn is the control plane for your app's LLM prompts. For each prompt and environment it
+holds one **pin**: a prompt version, one model and its parameters. Your app fetches prompts for
 those pins, renders the pinned prompt with this call's variables, calls the provider **itself with
 its own key and HTTP client**, and sends monitoring logs back in batches. PromptOn is never in the
-request path; if it is down your app keeps running on the last use cases it received.
+request path; if it is down your app keeps running on the last prompts it received.
 
     import prompton
 
     prompton.configure(api_key="ptn_myproject_...")
 
-    use_case = prompton.use_case("support_reply")
-    messages = use_case.messages({"question": question})
+    prompt_key = prompton.prompt("support_reply")
+    messages = prompt.messages({"question": question})
 
     def call():
         answer = openai_client.chat.completions.create(
-            model=use_case.model, messages=messages, **use_case.params
+            model=prompt_key.model, messages=messages, **prompt_key.params
         )
         return prompton.Result.from_openai(answer)
 
-    result = use_case.track(call, variables={"question": question})
+    result = prompt_key.track(call, variables={"question": question})
 
 A module-level default client covers the common case of one client per process. Build a
 :class:`PromptOn` yourself when you want several, or when you want to control its lifetime.
@@ -33,13 +33,15 @@ from typing import Any
 
 from ._version import SDK_NAME, VERSION
 from .buffer import BufferStats
-from .client import PromptOn, UseCase
+from .client import Prompt, PromptOn
 from .config import Config
 from .errors import (
     APIError,
     ConfigurationError,
     MissingVariableError,
     NoTemplateError,
+    PromptDocumentUnavailableError,
+    PromptLookupError,
     PromptOnError,
     ProviderError,
     RenderError,
@@ -47,19 +49,17 @@ from .errors import (
     TemplateSyntaxError,
     TransportError,
     UnknownPromptError,
-    UnknownUseCaseError,
+    UnknownTemplateError,
     UnresolvedError,
-    UseCaseDocumentUnavailableError,
-    UseCaseLookupError,
 )
 from .generation import Result
 from .http import HttpResponse, Transport, UrllibTransport
-from .snapshot_data import UseCaseDocument
+from .prompt_render_client import RenderedPrompt
+from .snapshot_data import PromptDocument
 from .stop_kind import normalize as normalize_stop_kind
 from .stop_kind import truncated as output_truncated
 from .template import LintReason, variables_of
 from .template import lint as lint_template
-from .use_case_prompt_client import FilledPrompt
 from .uuidv7 import uuid7
 
 __all__ = [
@@ -69,32 +69,31 @@ __all__ = [
     "BufferStats",
     "Config",
     "ConfigurationError",
-    "FilledPrompt",
     "HttpResponse",
     "LintReason",
     "MissingVariableError",
     "NoTemplateError",
+    "Prompt",
+    "PromptDocument",
+    "PromptDocumentUnavailableError",
+    "PromptLookupError",
     "PromptOn",
     "PromptOnError",
     "ProviderError",
     "RenderError",
+    "RenderedPrompt",
     "Result",
     "TemplateError",
     "TemplateSyntaxError",
     "Transport",
     "TransportError",
     "UnknownPromptError",
-    "UnknownUseCaseError",
+    "UnknownTemplateError",
     "UnresolvedError",
     "UrllibTransport",
-    "UseCase",
-    "UseCaseDocument",
-    "UseCaseDocumentUnavailableError",
-    "UseCaseLookupError",
     "__version__",
     "close",
     "configure",
-    "filled_prompt",
     "flush",
     "get_client",
     "lint_template",
@@ -103,10 +102,11 @@ __all__ = [
     "log_id",
     "normalize_stop_kind",
     "output_truncated",
-    "prompt_names",
+    "prompt",
+    "prompts_info",
+    "render_prompt",
     "set_client",
-    "use_case",
-    "use_cases_info",
+    "template_names",
     "uuid7",
     "variables_of",
 ]
@@ -147,28 +147,28 @@ def set_client(client: PromptOn | None) -> None:
         _default = client
 
 
-def use_case(key: str, prompt: str | None = None) -> UseCase:
-    """:meth:`PromptOn.use_case` on the default client."""
-    return get_client().use_case(key, prompt)
+def prompt(key: str, template: str | None = None) -> Prompt:
+    """:meth:`PromptOn.prompt` on the default client."""
+    return get_client().prompt(key, template)
 
 
-def prompt_names(use_case: str) -> list[str]:
-    """:meth:`PromptOn.prompt_names` on the default client."""
-    return get_client().prompt_names(use_case)
+def template_names(prompt_key: str) -> list[str]:
+    """:meth:`PromptOn.template_names` on the default client."""
+    return get_client().template_names(prompt_key)
 
 
-def filled_prompt(
-    use_case: str,
+def render_prompt(
+    prompt_key: str,
     *,
-    prompt: str | None = None,
+    template: str | None = None,
     variables: Mapping[str, Any] | None = None,
     environment: str | None = None,
     render_locally: bool = True,
-) -> FilledPrompt:
-    """:meth:`PromptOn.filled_prompt` on the default client."""
-    return get_client().filled_prompt(
-        use_case,
-        prompt=prompt,
+) -> RenderedPrompt:
+    """:meth:`PromptOn.render_prompt` on the default client."""
+    return get_client().render_prompt(
+        prompt_key,
+        template=template,
         variables=variables,
         environment=environment,
         render_locally=render_locally,
@@ -195,9 +195,9 @@ def flush(timeout: float = 5.0) -> BufferStats:
     return get_client().flush(timeout=timeout)
 
 
-def use_cases_info() -> dict[str, Any]:
-    """:meth:`PromptOn.use_cases_info` on the default client."""
-    return get_client().use_cases_info()
+def prompts_info() -> dict[str, Any]:
+    """:meth:`PromptOn.prompts_info` on the default client."""
+    return get_client().prompts_info()
 
 
 def close(timeout: float = 5.0) -> None:

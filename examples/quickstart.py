@@ -1,11 +1,11 @@
-"""A runnable end-to-end example: load a use case, call a provider, log the result.
+"""A runnable end-to-end example: load a prompt, call a provider, log the result.
 
 The "provider" here is a fake function, so this runs with no API keys and no network::
 
     python examples/quickstart.py
 
 Point it at a real PromptOn instead by setting ``PTN_API_KEY`` (and ``PTN_HOST``); the code below
-does not change - only where the use-case document comes from does::
+does not change - only where the prompt document comes from does::
 
     PTN_HOST=http://localhost:4000 PTN_API_KEY=ptn_yourproject_... python examples/quickstart.py
 """
@@ -18,9 +18,9 @@ import random
 import time
 
 from prompton import PromptOn, ProviderError, Result
-from prompton.testing import make_use_case_document
+from prompton.testing import make_prompt_document
 
-USE_CASE = "greeting"
+PROMPT_KEY = "greeting"
 
 
 def fake_provider(model: str, messages: list[dict], **params) -> dict:
@@ -44,10 +44,10 @@ def build_client() -> PromptOn:
         print("using the PromptOn server at", os.environ.get("PTN_HOST", "https://app.prompton.ai"))
         return PromptOn()
 
-    print("no PTN_API_KEY set - running against an in-memory use-case document")
+    print("no PTN_API_KEY set - running against an in-memory prompt document")
     client = PromptOn(mode="offline", api_key=None, disk_cache=False)
-    client.load_use_cases(
-        make_use_case_document(
+    client.load_prompts(
+        make_prompt_document(
             project="example",
             environment="production",
             greeting={
@@ -76,16 +76,16 @@ def build_client() -> PromptOn:
 def main() -> None:
     client = build_client()
     with client:
-        use_case = client.use_case(USE_CASE)
+        prompt_key = client.prompt(PROMPT_KEY)
         print(
-            f"loaded {USE_CASE}: model={use_case.model} "
-            f"revision={use_case.deployment['revision']} prompt={use_case.prompt} "
-            f"source={use_case.source}"
+            f"loaded {PROMPT_KEY}: model={prompt_key.model} "
+            f"revision={prompt_key.deployment['revision']} template={prompt_key.template} "
+            f"source={prompt_key.source}"
         )
-        print("prompts pinned by the live revision:", client.prompt_names(USE_CASE))
+        print("prompts pinned by the live revision:", client.template_names(PROMPT_KEY))
 
         variables = {"name": "Ada"}
-        managed_messages = use_case.messages(variables)
+        managed_messages = prompt_key.messages(variables)
         app_history = [{"role": "assistant", "content": "Ready to greet."}]
         messages = [
             *managed_messages,
@@ -96,7 +96,7 @@ def main() -> None:
 
         def call() -> Result:
             try:
-                answer = fake_provider(use_case.model, messages, **use_case.params)
+                answer = fake_provider(prompt_key.model, messages, **prompt_key.params)
             except TimeoutError as error:
                 raise ProviderError(str(error), kind="timeout") from error
             result = Result.from_openai(answer)
@@ -104,7 +104,7 @@ def main() -> None:
             return result
 
         try:
-            result = use_case.track(
+            result = prompt_key.track(
                 call,
                 variables=variables,
                 input_messages=messages,
@@ -120,7 +120,7 @@ def main() -> None:
 
         stats = client.flush(timeout=5).as_dict()
         print("monitoring logs:", {k: v for k, v in stats.items() if v})
-        print("use cases:", client.use_cases_info())
+        print("prompts:", client.prompts_info())
 
 
 if __name__ == "__main__":

@@ -14,11 +14,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from prompton import PromptOn
-from prompton.errors import TransportError, UseCaseDocumentUnavailableError
+from prompton.errors import PromptDocumentUnavailableError, TransportError
 from prompton.http import UrllibTransport
-from prompton.testing import make_use_case_document
+from prompton.testing import make_prompt_document
 
-DOCUMENT = make_use_case_document(
+DOCUMENT = make_prompt_document(
     project="stub",
     environment="production",
     greeting={
@@ -133,9 +133,9 @@ def client_for(host: str, tmp_path, **options) -> PromptOn:
 def test_a_real_round_trip_resolves_renders_and_logs(stub, tmp_path):
     client = client_for(stub.host, tmp_path)
     try:
-        use_case = client.use_case("greeting")
-        assert use_case.messages({"name": "Ada"})[0]["content"] == "Say hello to Ada."
-        use_case.track(lambda: "hello", variables={"name": "Ada"})
+        prompt_key = client.prompt("greeting")
+        assert prompt_key.messages({"name": "Ada"})[0]["content"] == "Say hello to Ada."
+        prompt_key.track(lambda: "hello", variables={"name": "Ada"})
         stats = client.flush(timeout=5)
         assert stats.accepted == 1
         posts = [call for call in stub.calls if call["method"] == "POST"]
@@ -150,7 +150,7 @@ def test_a_real_round_trip_resolves_renders_and_logs(stub, tmp_path):
 def test_a_repoll_sends_if_none_match_and_gets_a_304(stub, tmp_path):
     client = client_for(stub.host, tmp_path, cache_ttl=0.1)
     try:
-        client.use_case("greeting")
+        client.prompt("greeting")
         with client._store._lock:
             client._store._last_attempt["greeting"] -= 10.1
             client._store._last_success["greeting"] -= 10.1
@@ -164,18 +164,18 @@ def test_a_repoll_sends_if_none_match_and_gets_a_304(stub, tmp_path):
 def test_a_429_pauses_and_the_caller_never_sees_an_error(stub, tmp_path):
     client = client_for(stub.host, tmp_path, cache_ttl=0.1)
     try:
-        client.use_case("greeting")
+        client.prompt("greeting")
         stub.snapshot_status = 429
         stub.retry_after = "45"
         with client._store._lock:
             client._store._last_attempt["greeting"] -= 10.1
             client._store._last_success["greeting"] -= 10.1
         client._store.refresh(raise_errors=False, key="greeting")
-        assert client.use_cases_info()["retry_after_seconds"] <= 1
+        assert client.prompts_info()["retry_after_seconds"] <= 1
 
         before = len([call for call in stub.calls if call["method"] == "GET"])
         for _ in range(3):
-            assert client.use_case("greeting").model == "openai/gpt-4o-mini"
+            assert client.prompt("greeting").model == "openai/gpt-4o-mini"
         after = len([call for call in stub.calls if call["method"] == "GET"])
         assert after == before, "no request may be made inside the config fetch gate"
     finally:
@@ -184,7 +184,7 @@ def test_a_429_pauses_and_the_caller_never_sees_an_error(stub, tmp_path):
 
 def test_when_the_server_is_down_the_disk_cache_keeps_the_app_running(stub, tmp_path):
     warm = client_for(stub.host, tmp_path)
-    warm.use_case("greeting")
+    warm.prompt("greeting")
     warm.close(timeout=1)
 
     dead_host = stub.host
@@ -193,9 +193,9 @@ def test_when_the_server_is_down_the_disk_cache_keeps_the_app_running(stub, tmp_
 
     cold = client_for(dead_host, tmp_path)
     try:
-        use_case = cold.use_case("greeting")
-        assert use_case.source == "disk"
-        assert use_case.model == "openai/gpt-4o-mini"
+        prompt_key = cold.prompt("greeting")
+        assert prompt_key.source == "disk"
+        assert prompt_key.model == "openai/gpt-4o-mini"
     finally:
         cold.close(timeout=1)
 
@@ -206,8 +206,8 @@ def test_with_nothing_cached_a_dead_server_fails_with_a_clear_message(stub, tmp_
     stub.server.server_close()
     client = client_for(dead_host, tmp_path)
     try:
-        with pytest.raises(UseCaseDocumentUnavailableError) as error:
-            client.use_case("greeting")
+        with pytest.raises(PromptDocumentUnavailableError) as error:
+            client.prompt("greeting")
         assert "unreachable" in str(error.value)
     finally:
         client.close(timeout=1)

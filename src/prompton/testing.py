@@ -2,14 +2,14 @@
 
 Run your suite with ``mode="test"``: nothing is sent, and every monitoring log the app produced is
 kept on ``client.captured`` for you to assert on. Build a schema v1 prompt document for the prompts
-under test with :func:`make_use_case_document` and hand it to ``client.load_use_cases``.
+under test with :func:`make_prompt_document` and hand it to ``client.load_prompts``.
 
     client = PromptOn(mode="test", api_key=None)
-    client.load_use_cases(
-        make_use_case_document(greeting={"messages": [...], "model": "openai/gpt-4o-mini"})
+    client.load_prompts(
+        make_prompt_document(greeting={"messages": [...], "model": "openai/gpt-4o-mini"})
     )
 
-    use_case = client.use_case("greeting")
+    prompt = client.prompt("greeting")
     ...
     assert client.captured[0]["status"] == "ok"
 """
@@ -18,22 +18,22 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["make_use_case_document"]
+__all__ = ["make_prompt_document"]
 
 _DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
-def make_use_case_document(
+def make_prompt_document(
     *,
     project: str = "test",
     environment: str = "production",
-    **use_cases: dict[str, Any],
+    **prompts: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build a schema v1 prompt document for the given use cases.
+    """Build a schema v1 prompt document for the given prompts.
 
-    Each keyword is a use case key; its value describes the pin::
+    Each keyword is a prompt key; its value describes the pin::
 
-        make_use_case_document(
+        make_prompt_document(
             greeting={
                 "kind": "chat",                       # chat (default) | text | embedding
                 "model": "openai/gpt-4o-mini",
@@ -58,7 +58,7 @@ def make_use_case_document(
         "models": {},
     }
 
-    for _index, (key, spec) in enumerate(use_cases.items(), start=1):
+    for _index, (key, spec) in enumerate(prompts.items(), start=1):
         spec = dict(spec)
         kind = spec.get("kind", "chat")
         provider = spec.get("provider", "openrouter")

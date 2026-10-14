@@ -1,15 +1,15 @@
-"""Local resolution: snapshot + use case key (+ prompt name) into a :class:`Resolution`.
+"""Local resolution: snapshot + prompt key (+ template name) into a :class:`Resolution`.
 
 A pure function over a decoded snapshot, and the same algorithm the server runs behind
 the prompt endpoint::
 
-    deployment       = snapshot.deployments[use_case]      # absent -> unresolved, not a fallback
-    version          = snapshot.prompt_versions[deployment.prompt_pins[prompt or "default"]]
+    deployment       = snapshot.deployments[prompt_key]      # absent -> unresolved, not a fallback
+    version          = snapshot.prompt_versions[deployment.template_pins[template or "default"]]
     model            = snapshot.models[deployment.model_id]
-    params           = use_case.default_params      <- deployment.params
+    params           = prompt_key.default_params      <- deployment.params
     provider_options = model.provider_options       <- deployment.provider_options
 
-There is no fallback to ``default`` when the requested prompt name is not pinned: shipping English
+There is no fallback to ``default`` when the requested template name is not pinned: shipping English
 to a request that asked for ``ko`` is worse than an error.
 """
 
@@ -18,13 +18,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from .errors import UnknownPromptError, UnknownUseCaseError, UnresolvedError
+from .errors import UnknownPromptError, UnknownTemplateError, UnresolvedError
 from .params import merge
-from .snapshot_data import PayloadPolicy, UseCaseDocument
+from .snapshot_data import PayloadPolicy, PromptDocument
 
-__all__ = ["DEFAULT_PROMPT", "prompt_names"]
+__all__ = ["DEFAULT_TEMPLATE", "template_names"]
 
-DEFAULT_PROMPT = "default"
+DEFAULT_TEMPLATE = "default"
 
 ResolutionSource = Literal["remote", "disk", "bundle", "manual"]
 
@@ -38,9 +38,9 @@ class Resolution:
     which deployment revision and prompt version produced the call.
     """
 
-    use_case: str
+    prompt_key: str
     kind: str
-    prompt: str | None
+    template: str | None
     deployment_id: str | None
     deployment_revision: str | None
     prompt_version_id: str | None
@@ -54,7 +54,7 @@ class Resolution:
     messages: tuple[dict[str, Any], ...] | None = None
     text_template: str | None = None
     decision: dict[str, Any] | None = None
-    available_prompts: tuple[str, ...] = ()
+    available_templates: tuple[str, ...] = ()
     api: str | None = None
     request_path: str | None = None
     tools: dict[str, Any] | None = None
@@ -66,15 +66,15 @@ class Resolution:
 
     @property
     def prompt_version(self) -> dict[str, Any] | None:
-        """``{"id", "number"}`` of the pinned version, or ``None`` for an embedding use case."""
+        """``{"id", "number"}`` of the pinned version, or ``None`` for an embedding prompt."""
         if self.prompt_version_id is None and self.prompt_version_number is None:
             return None
         return {"id": self.prompt_version_id, "number": self.prompt_version_number}
 
     @property
     def key(self) -> str:
-        """The use case key."""
-        return self.use_case
+        """The prompt key."""
+        return self.prompt_key
 
     @property
     def deployment(self) -> dict[str, Any]:
@@ -82,53 +82,53 @@ class Resolution:
         return {"id": self.deployment_id, "revision": self.deployment_revision}
 
     @property
-    def prompt_names(self) -> tuple[str, ...]:
-        """Prompt names pinned by this deployment."""
-        return self.available_prompts
+    def template_names(self) -> tuple[str, ...]:
+        """Template names pinned by this deployment."""
+        return self.available_templates
 
 
 def resolve(
-    snapshot: UseCaseDocument,
-    use_case: str,
-    prompt: str | None = None,
+    snapshot: PromptDocument,
+    prompt_key: str,
+    template: str | None = None,
     *,
     source: ResolutionSource = "remote",
     etag: str | None = None,
 ) -> Resolution:
-    """Resolve one use case. Raises the contract's three resolution errors."""
-    entry = snapshot.use_cases.get(use_case)
+    """Resolve one prompt. Raises the contract's three resolution errors."""
+    entry = snapshot.prompts.get(prompt_key)
     if entry is None:
-        raise UnknownUseCaseError(use_case)
+        raise UnknownPromptError(prompt_key)
 
-    deployment = snapshot.deployments.get(use_case)
+    deployment = snapshot.deployments.get(prompt_key)
     if deployment is None:
-        raise UnresolvedError(use_case)
+        raise UnresolvedError(prompt_key)
 
-    available = tuple(sorted(deployment.prompt_pins))
+    available = tuple(sorted(deployment.template_pins))
 
     if entry.kind == "embedding":
-        # An embedding use case has no prompt at all; a prompt name is ignored, not rejected.
+        # An embedding prompt has no template at all; a template name is ignored, not rejected.
         prompt_name: str | None = None
         version_id: str | None = None
         available = ()
     else:
-        prompt_name = prompt or DEFAULT_PROMPT
-        if prompt_name not in deployment.prompt_pins:
-            raise UnknownPromptError(use_case, prompt_name, list(available))
-        version_id = deployment.prompt_pins[prompt_name]
+        prompt_name = template or DEFAULT_TEMPLATE
+        if prompt_name not in deployment.template_pins:
+            raise UnknownTemplateError(prompt_key, prompt_name, list(available))
+        version_id = deployment.template_pins[prompt_name]
 
     warnings: list[str] = []
     version = None
     if version_id is not None:
         version = snapshot.prompt_versions.get(version_id)
         if version is None:
-            raise UnresolvedError(use_case)
+            raise UnresolvedError(prompt_key)
 
     model = None
     if deployment.model_id is not None:
         model = snapshot.models.get(deployment.model_id)
         if model is None:
-            raise UnresolvedError(use_case)
+            raise UnresolvedError(prompt_key)
 
     runtime_kind = version.kind or entry.kind if version else entry.kind
     messages = version.messages if (version and runtime_kind == "chat") else None
@@ -136,9 +136,9 @@ def resolve(
     decision = version.decision if (version and runtime_kind == "decision") else None
 
     return Resolution(
-        use_case=entry.key,
+        prompt_key=entry.key,
         kind=runtime_kind,
-        prompt=prompt_name,
+        template=prompt_name,
         deployment_id=deployment.id,
         deployment_revision=deployment.revision,
         prompt_version_id=version.id if version else None,
@@ -154,7 +154,7 @@ def resolve(
         messages=messages,
         text_template=text_template,
         decision=decision,
-        available_prompts=available,
+        available_templates=available,
         variables=entry.variables,
         payload_policy=entry.payload_policy,
         api=deployment.api,
@@ -166,9 +166,9 @@ def resolve(
     )
 
 
-def prompt_names(snapshot: UseCaseDocument, use_case: str) -> list[str]:
-    """The prompt names this use case's live deployment pins, sorted. ``[]`` when undeployed."""
-    if use_case not in snapshot.use_cases:
-        raise UnknownUseCaseError(use_case)
-    deployment = snapshot.deployments.get(use_case)
-    return sorted(deployment.prompt_pins) if deployment else []
+def template_names(snapshot: PromptDocument, prompt_key: str) -> list[str]:
+    """The prompt names this prompt's live deployment pins, sorted. ``[]`` when undeployed."""
+    if prompt_key not in snapshot.prompts:
+        raise UnknownPromptError(prompt_key)
+    deployment = snapshot.deployments.get(prompt_key)
+    return sorted(deployment.template_pins) if deployment else []

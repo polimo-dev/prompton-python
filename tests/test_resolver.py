@@ -2,21 +2,21 @@ from __future__ import annotations
 
 import pytest
 
-from prompton.errors import UnknownPromptError, UnknownUseCaseError, UnresolvedError
-from prompton.resolver import prompt_names, resolve
+from prompton.errors import UnknownPromptError, UnknownTemplateError, UnresolvedError
+from prompton.resolver import resolve, template_names
 from prompton.snapshot_data import (
     SCHEMA_VERSION,
-    InvalidUseCaseDocumentError,
+    InvalidPromptDocumentError,
+    PromptDocument,
     UnsupportedSchemaVersionError,
-    UseCaseDocument,
 )
-from prompton.testing import make_use_case_document
+from prompton.testing import make_prompt_document
 from tests.conftest import readable_document, single_prompt_document
 
 
 @pytest.fixture
-def snapshot() -> UseCaseDocument:
-    document = make_use_case_document(
+def snapshot() -> PromptDocument:
+    document = make_prompt_document(
         greeting={
             "model": "openai/gpt-4o-mini",
             "messages": [{"role": "user", "content": "Hi {{ name }}"}],
@@ -29,7 +29,7 @@ def snapshot() -> UseCaseDocument:
         embed={"kind": "embedding", "model": "openai/text-embedding-3-small"},
     )
     document["prompts"]["draft"] = {"id": "uc-draft", "kind": "chat", "default_params": {}}
-    return UseCaseDocument.from_mapping(document)
+    return PromptDocument.from_mapping(document)
 
 
 def test_merges_params_shallowly_with_the_deployment_winning(snapshot):
@@ -48,39 +48,39 @@ def test_an_override_of_none_is_kept_not_deleted(snapshot):
 
 
 def test_the_prompt_name_is_the_only_selection_axis(snapshot):
-    assert resolve(snapshot, "greeting").prompt == "default"
-    assert resolve(snapshot, "greeting", "ko").prompt == "ko"
-    assert prompt_names(snapshot, "greeting") == ["default", "ko"]
+    assert resolve(snapshot, "greeting").template == "default"
+    assert resolve(snapshot, "greeting", "ko").template == "ko"
+    assert template_names(snapshot, "greeting") == ["default", "ko"]
 
 
 def test_an_unpinned_prompt_name_never_falls_back_to_default(snapshot):
-    with pytest.raises(UnknownPromptError) as error:
+    with pytest.raises(UnknownTemplateError) as error:
         resolve(snapshot, "greeting", "fr")
-    assert error.value.prompt == "fr"
-    assert error.value.prompt_names == ["default", "ko"]
+    assert error.value.template == "fr"
+    assert error.value.template_names == ["default", "ko"]
 
 
-def test_an_embedding_use_case_ignores_a_prompt_name(snapshot):
+def test_an_embedding_prompt_ignores_a_prompt_name(snapshot):
     resolution = resolve(snapshot, "embed", "ko")
-    assert resolution.prompt is None
+    assert resolution.template is None
     assert resolution.prompt_version is None
-    assert resolution.prompt_names == ()
+    assert resolution.template_names == ()
     assert resolution.model == "openai/text-embedding-3-small"
 
 
-def test_unknown_use_case_and_undeployed_use_case_are_different_errors(snapshot):
-    with pytest.raises(UnknownUseCaseError):
+def test_unknown_prompt_and_undeployed_prompt_are_different_errors(snapshot):
+    with pytest.raises(UnknownPromptError):
         resolve(snapshot, "nope")
     with pytest.raises(UnresolvedError):
         resolve(snapshot, "draft")
 
 
 def test_a_dangling_reference_fails_closed(snapshot):
-    document = make_use_case_document(greeting={"messages": [{"role": "user", "content": "hi"}]})
+    document = make_prompt_document(greeting={"messages": [{"role": "user", "content": "hi"}]})
     document["deployments"]["greeting"]["model"] = "gone/model"
     document["deployments"]["greeting"]["prompt_pins"]["default"] = 99
-    with pytest.raises((UnresolvedError, UnknownPromptError)):
-        resolve(UseCaseDocument.from_mapping(document), "greeting")
+    with pytest.raises((UnresolvedError, UnknownPromptError, UnknownTemplateError)):
+        resolve(PromptDocument.from_mapping(document), "greeting")
 
 
 def test_schema1_aggregate_requires_all_keyed_resource_maps():
@@ -93,41 +93,41 @@ def test_schema1_aggregate_requires_all_keyed_resource_maps():
         "prompt_versions": {},
         "models": {},
     }
-    UseCaseDocument.from_mapping(base)
+    PromptDocument.from_mapping(base)
     for collection in ("deployments", "prompt_versions", "models"):
         missing = dict(base)
         missing.pop(collection)
-        with pytest.raises(InvalidUseCaseDocumentError, match="keyed object"):
-            UseCaseDocument.from_mapping(missing)
+        with pytest.raises(InvalidPromptDocumentError, match="keyed object"):
+            PromptDocument.from_mapping(missing)
 
         array = dict(base)
         array[collection] = []
-        with pytest.raises(InvalidUseCaseDocumentError, match="keyed object"):
-            UseCaseDocument.from_mapping(array)
+        with pytest.raises(InvalidPromptDocumentError, match="keyed object"):
+            PromptDocument.from_mapping(array)
 
 
 def test_decodes_variable_definitions_from_variables_and_rejects_old_input_schema_metadata(
     snapshot_document,
 ):
-    document = UseCaseDocument.from_mapping(readable_document(snapshot_document))
-    assert document.use_cases["greeting"].variables[0].name == "name"
-    assert not hasattr(document.use_cases["greeting"], "input_schema")
+    document = PromptDocument.from_mapping(readable_document(snapshot_document))
+    assert document.prompts["greeting"].variables[0].name == "name"
+    assert not hasattr(document.prompts["greeting"], "input_schema")
 
     old = readable_document(snapshot_document)
     old["prompts"]["greeting"]["input_schema"] = old["prompts"]["greeting"].pop("variables")
-    with pytest.raises(InvalidUseCaseDocumentError, match="not input_schema"):
-        UseCaseDocument.from_mapping(old)
+    with pytest.raises(InvalidPromptDocumentError, match="not input_schema"):
+        PromptDocument.from_mapping(old)
 
 
 def test_schema1_prompt_id_is_not_read_from_legacy_uuid_field(snapshot_document):
     document = readable_document(snapshot_document)
     document["prompts"]["greeting"]["id"] = "0198f2a1-0000-7000-8000-00000000c001"
-    snapshot = UseCaseDocument.from_mapping(document)
-    assert snapshot.use_cases["greeting"].id is None
+    snapshot = PromptDocument.from_mapping(document)
+    assert snapshot.prompts["greeting"].id is None
 
 
 def test_schema1_readable_resources_have_no_public_resource_ids(snapshot_document):
-    snapshot = UseCaseDocument.from_mapping(readable_document(snapshot_document))
+    snapshot = PromptDocument.from_mapping(readable_document(snapshot_document))
     resolution = resolve(snapshot, "greeting")
     assert resolution.deployment == {"id": None, "revision": "v2026.09.30-1"}
     assert resolution.model_id is None
@@ -139,7 +139,7 @@ def test_schema1_readable_resources_have_no_public_resource_ids(snapshot_documen
 
 
 def test_schema1_single_prompt_chat_and_decision_documents():
-    greeting = UseCaseDocument.from_mapping(single_prompt_document("greeting"))
+    greeting = PromptDocument.from_mapping(single_prompt_document("greeting"))
     resolution = resolve(greeting, "greeting")
     assert resolution.deployment == {"id": None, "revision": "v2026.09.30-1"}
     assert resolution.model_id is None
@@ -149,7 +149,7 @@ def test_schema1_single_prompt_chat_and_decision_documents():
     assert resolution.messages is not None
     assert resolution.messages[1]["content"] == "Say hello to {{ name }}."
 
-    sentiment = UseCaseDocument.from_mapping(single_prompt_document("sentiment"))
+    sentiment = PromptDocument.from_mapping(single_prompt_document("sentiment"))
     decision = resolve(sentiment, "sentiment")
     assert decision.kind == "decision"
     assert decision.model == "typesafe/jev-1.13"
@@ -159,31 +159,31 @@ def test_schema1_single_prompt_chat_and_decision_documents():
 def test_schema1_rejects_incomplete_mixed_or_mismatched_single_prompt_documents():
     missing = single_prompt_document("greeting")
     missing.pop("prompt_version")
-    with pytest.raises(InvalidUseCaseDocumentError, match="prompt_version is required"):
-        UseCaseDocument.from_mapping(missing)
+    with pytest.raises(InvalidPromptDocumentError, match="prompt_version is required"):
+        PromptDocument.from_mapping(missing)
 
     mixed = single_prompt_document("greeting", prompts={})
-    with pytest.raises(InvalidUseCaseDocumentError, match="singular resources"):
-        UseCaseDocument.from_mapping(mixed)
+    with pytest.raises(InvalidPromptDocumentError, match="singular resources"):
+        PromptDocument.from_mapping(mixed)
 
     mixed_null = single_prompt_document("greeting", prompts=None)
-    with pytest.raises(InvalidUseCaseDocumentError, match="singular resources"):
-        UseCaseDocument.from_mapping(mixed_null)
+    with pytest.raises(InvalidPromptDocumentError, match="singular resources"):
+        PromptDocument.from_mapping(mixed_null)
 
     bad_version_prompt = single_prompt_document("greeting")
     bad_version_prompt["prompt_version"]["prompt"] = "review"
-    with pytest.raises(InvalidUseCaseDocumentError, match=r"prompt_version\.prompt"):
-        UseCaseDocument.from_mapping(bad_version_prompt)
+    with pytest.raises(InvalidPromptDocumentError, match=r"prompt_version\.prompt"):
+        PromptDocument.from_mapping(bad_version_prompt)
 
     bad_deployment_version = single_prompt_document("greeting")
     bad_deployment_version["deployment"]["prompt_version"] = 99
-    with pytest.raises(InvalidUseCaseDocumentError, match=r"deployment\.prompt_version"):
-        UseCaseDocument.from_mapping(bad_deployment_version)
+    with pytest.raises(InvalidPromptDocumentError, match=r"deployment\.prompt_version"):
+        PromptDocument.from_mapping(bad_deployment_version)
 
     bad_model = single_prompt_document("greeting")
     bad_model["deployment"]["model"] = "different/model"
-    with pytest.raises(InvalidUseCaseDocumentError, match="provider/model"):
-        UseCaseDocument.from_mapping(bad_model)
+    with pytest.raises(InvalidPromptDocumentError, match="provider/model"):
+        PromptDocument.from_mapping(bad_model)
 
 
 def test_schema1_scopes_prompt_versions_by_prompt_and_models_by_provider(snapshot_document):
@@ -221,7 +221,7 @@ def test_schema1_scopes_prompt_versions_by_prompt_and_models_by_provider(snapsho
         "capabilities": [],
         "status": "active",
     }
-    snapshot = UseCaseDocument.from_mapping(document)
+    snapshot = PromptDocument.from_mapping(document)
     assert resolve(snapshot, "greeting").provider_options == {"only": ["OpenAI"]}
     review = resolve(snapshot, "review")
     assert review.provider == "direct"
@@ -233,19 +233,19 @@ def test_schema1_invalid_pins_and_missing_references_fail_closed(snapshot_docume
     for prompt_version in ("2", "2abc", 2.9, 0):
         invalid = readable_document(snapshot_document)
         invalid["deployments"]["greeting"]["prompt_pins"]["default"] = prompt_version
-        invalid_snapshot = UseCaseDocument.from_mapping(invalid)
-        with pytest.raises(UnknownPromptError):
+        invalid_snapshot = PromptDocument.from_mapping(invalid)
+        with pytest.raises(UnknownTemplateError):
             resolve(invalid_snapshot, "greeting")
 
     missing_version = readable_document(snapshot_document)
     missing_version["deployments"]["greeting"]["prompt_pins"]["default"] = 99
     with pytest.raises(UnresolvedError):
-        resolve(UseCaseDocument.from_mapping(missing_version), "greeting")
+        resolve(PromptDocument.from_mapping(missing_version), "greeting")
 
     missing_model = readable_document(snapshot_document)
     missing_model["deployments"]["greeting"]["model"] = "missing/model"
     with pytest.raises(UnresolvedError):
-        resolve(UseCaseDocument.from_mapping(missing_model), "greeting")
+        resolve(PromptDocument.from_mapping(missing_model), "greeting")
 
 
 def test_schema1_relabels_do_not_make_old_uuid_resources_resolvable(snapshot_document):
@@ -270,30 +270,30 @@ def test_schema1_relabels_do_not_make_old_uuid_resources_resolvable(snapshot_doc
         "provider": "openrouter",
         "model_id": "openai/gpt-4o-mini",
     }
-    with pytest.raises((UnresolvedError, UnknownPromptError)):
-        resolve(UseCaseDocument.from_mapping(document), "greeting")
+    with pytest.raises((UnresolvedError, UnknownPromptError, UnknownTemplateError)):
+        resolve(PromptDocument.from_mapping(document), "greeting")
 
 
 def test_schema1_composite_keys_must_match_embedded_fields(snapshot_document):
     bad_version = readable_document(snapshot_document)
     bad_version["prompt_versions"]["greeting@1"]["prompt"] = "review"
     with pytest.raises(UnresolvedError):
-        resolve(UseCaseDocument.from_mapping(bad_version), "greeting")
+        resolve(PromptDocument.from_mapping(bad_version), "greeting")
 
     bad_number = readable_document(snapshot_document)
     bad_number["prompt_versions"]["greeting@1"]["number"] = 1.9
     with pytest.raises(UnresolvedError):
-        resolve(UseCaseDocument.from_mapping(bad_number), "greeting")
+        resolve(PromptDocument.from_mapping(bad_number), "greeting")
 
     bad_model = readable_document(snapshot_document)
     bad_model["models"]["openrouter:openai/gpt-4o-mini"]["provider"] = "direct"
     with pytest.raises(UnresolvedError):
-        resolve(UseCaseDocument.from_mapping(bad_model), "greeting")
+        resolve(PromptDocument.from_mapping(bad_model), "greeting")
 
     bad_deployment_model = readable_document(snapshot_document)
     bad_deployment_model["deployments"]["greeting"]["model"] = 123
     with pytest.raises(UnresolvedError):
-        resolve(UseCaseDocument.from_mapping(bad_deployment_model), "greeting")
+        resolve(PromptDocument.from_mapping(bad_deployment_model), "greeting")
 
     duplicate = readable_document(snapshot_document)
     duplicate["models"]["direct:openai/gpt-4o-mini"] = {
@@ -305,7 +305,7 @@ def test_schema1_composite_keys_must_match_embedded_fields(snapshot_document):
         "capabilities": [],
         "status": "active",
     }
-    assert resolve(UseCaseDocument.from_mapping(duplicate), "greeting").provider_options == {
+    assert resolve(PromptDocument.from_mapping(duplicate), "greeting").provider_options == {
         "only": ["OpenAI"]
     }
 
@@ -319,41 +319,41 @@ def test_the_source_and_etag_travel_with_the_resolution(snapshot):
 class TestSnapshotDecoding:
     def test_older_schema_versions_are_refused(self):
         with pytest.raises(UnsupportedSchemaVersionError):
-            UseCaseDocument.from_mapping({"schema_version": 2, "prompts": {}})
+            PromptDocument.from_mapping({"schema_version": 2, "prompts": {}})
 
     def test_newer_schema_versions_are_refused(self):
-        document = make_use_case_document(greeting={"messages": []})
+        document = make_prompt_document(greeting={"messages": []})
         document["schema_version"] = SCHEMA_VERSION + 2
         document["prompts"]["greeting"]["brand_new_field"] = 1
         with pytest.raises(UnsupportedSchemaVersionError):
-            UseCaseDocument.from_mapping(document)
+            PromptDocument.from_mapping(document)
 
     def test_legacy_version_field_is_not_a_schema_version(self):
-        document = make_use_case_document(greeting={"messages": []})
+        document = make_prompt_document(greeting={"messages": []})
         document["version"] = document.pop("schema_version")
-        with pytest.raises(InvalidUseCaseDocumentError, match="schema_version is required"):
-            UseCaseDocument.from_mapping(document)
+        with pytest.raises(InvalidPromptDocumentError, match="schema_version is required"):
+            PromptDocument.from_mapping(document)
 
     def test_missing_schema_version_is_refused_even_when_deployments_exist(self):
-        document = make_use_case_document(greeting={"messages": []})
+        document = make_prompt_document(greeting={"messages": []})
         document.pop("schema_version")
-        with pytest.raises(InvalidUseCaseDocumentError, match="schema_version is required"):
-            UseCaseDocument.from_mapping(document)
+        with pytest.raises(InvalidPromptDocumentError, match="schema_version is required"):
+            PromptDocument.from_mapping(document)
 
     def test_schema_version_must_be_supported_integer(self):
-        document = make_use_case_document(greeting={"messages": []})
+        document = make_prompt_document(greeting={"messages": []})
         document["schema_version"] = "4"
-        with pytest.raises(InvalidUseCaseDocumentError, match="integer"):
-            UseCaseDocument.from_mapping(document)
+        with pytest.raises(InvalidPromptDocumentError, match="integer"):
+            PromptDocument.from_mapping(document)
 
     def test_deployment_revision_must_be_a_string(self):
-        document = make_use_case_document(greeting={"messages": []})
+        document = make_prompt_document(greeting={"messages": []})
         document["deployments"]["greeting"]["revision"] = 1
-        with pytest.raises(InvalidUseCaseDocumentError, match="revision must be a string"):
-            UseCaseDocument.from_mapping(document)
+        with pytest.raises(InvalidPromptDocumentError, match="revision must be a string"):
+            PromptDocument.from_mapping(document)
 
     def test_an_environment_with_no_deployments_is_not_an_error(self):
-        data = UseCaseDocument.from_mapping(
+        data = PromptDocument.from_mapping(
             {
                 "schema_version": SCHEMA_VERSION,
                 "environment": "staging",
@@ -367,7 +367,7 @@ class TestSnapshotDecoding:
             resolve(data, "greeting")
 
     def test_invalid_json_and_a_non_object_are_rejected(self):
-        with pytest.raises(InvalidUseCaseDocumentError):
-            UseCaseDocument.from_json(b"{not json")
-        with pytest.raises(InvalidUseCaseDocumentError):
-            UseCaseDocument.from_mapping([1, 2, 3])
+        with pytest.raises(InvalidPromptDocumentError):
+            PromptDocument.from_json(b"{not json")
+        with pytest.raises(InvalidPromptDocumentError):
+            PromptDocument.from_mapping([1, 2, 3])

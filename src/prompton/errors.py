@@ -1,6 +1,6 @@
 """Every exception the SDK raises.
 
-The rule of thumb: configuration mistakes and use-case lookup mistakes raise, logging never does.
+The rule of thumb: configuration mistakes and prompt lookup mistakes raise, logging never does.
 ``PromptOn.log`` and ``PromptOn.flush`` swallow their own failures (they count them instead), so a
 monitoring problem can never take down a request that already produced an answer.
 """
@@ -18,57 +18,57 @@ class ConfigurationError(PromptOnError):
     """An option or environment variable holds a value the SDK cannot use."""
 
 
-class UseCaseDocumentUnavailableError(PromptOnError):
-    """No use-case document in memory, on disk or in the bundle, and the server is unreachable.
+class PromptDocumentUnavailableError(PromptOnError):
+    """No prompt document in memory, on disk or in the bundle, and the server is unreachable.
 
-    This is the only use-case lookup error that means "PromptOn is unreachable and nothing is
+    This is the only prompt lookup error that means "PromptOn is unreachable and nothing is
     cached". Every other lookup error is a bug in the app or in the deployment.
     """
 
 
-class UseCaseLookupError(PromptOnError):
-    """Base class for local use-case lookup failures described by the runtime contract."""
+class PromptLookupError(PromptOnError):
+    """Base class for local prompt lookup failures described by the runtime contract."""
 
-    code = "use_case_lookup_error"
-
-
-class UnknownUseCaseError(UseCaseLookupError):
-    """The use-case document holds no use case with this key."""
-
-    code = "unknown_use_case"
-
-    def __init__(self, use_case: str) -> None:
-        super().__init__(f"unknown use case: {use_case}")
-        self.use_case = use_case
+    code = "prompt_lookup_error"
 
 
-class UnresolvedError(UseCaseLookupError):
-    """The use case exists but has no live deployment in this environment."""
+class UnknownPromptError(PromptLookupError):
+    """The prompt document holds no prompt with this key."""
+
+    code = "unknown_prompt"
+
+    def __init__(self, prompt_key: str) -> None:
+        super().__init__(f"unknown prompt: {prompt_key}")
+        self.prompt_key = prompt_key
+
+
+class UnresolvedError(PromptLookupError):
+    """The prompt exists but has no live deployment in this environment."""
 
     code = "unresolved"
 
-    def __init__(self, use_case: str) -> None:
-        super().__init__(f"no live deployment for use case: {use_case}")
-        self.use_case = use_case
+    def __init__(self, prompt_key: str) -> None:
+        super().__init__(f"no live deployment for prompt: {prompt_key}")
+        self.prompt_key = prompt_key
 
 
-class UnknownPromptError(UseCaseLookupError):
-    """The live deployment pins no prompt version under the requested name.
+class UnknownTemplateError(PromptLookupError):
+    """The live deployment pins no prompt template version under the requested template name.
 
     There is deliberately no fallback to ``default``: shipping English to a request that asked for
     ``ko`` is worse than an error.
     """
 
-    code = "unknown_prompt"
+    code = "unknown_template"
 
-    def __init__(self, use_case: str, prompt: str, prompt_names: list[str]) -> None:
+    def __init__(self, prompt_key: str, template: str, template_names: list[str]) -> None:
         super().__init__(
-            f'the live deployment for {use_case} pins no prompt named "{prompt}" - '
-            f"available prompt names: {', '.join(prompt_names) or '(none)'}"
+            f'the live deployment for {prompt_key} pins no template named "{template}" - '
+            f"available template names: {', '.join(template_names) or '(none)'}"
         )
-        self.use_case = use_case
-        self.prompt = prompt
-        self.prompt_names = prompt_names
+        self.prompt_key = prompt_key
+        self.template = template
+        self.template_names = template_names
 
 
 class TemplateError(PromptOnError):
@@ -103,7 +103,7 @@ class RenderError(TemplateError):
 
 
 class NoTemplateError(TemplateError):
-    """The selected use case carries no template (``kind: embedding``)."""
+    """The selected prompt carries no template (``kind: embedding``)."""
 
     code = "no_template"
 

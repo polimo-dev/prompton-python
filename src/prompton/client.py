@@ -1,4 +1,4 @@
-"""The client: use cases, render, log.
+"""The client: prompts, render, log.
 
 Three things happen here and nothing else. You ask which prompt, model and params to use; you
 render that prompt with this call's variables; you send back what happened. Your provider key and
@@ -26,17 +26,17 @@ from .errors import NoTemplateError, ProviderError
 from .generation import CallMeta, Result, build_record, iso_timestamp
 from .http import Transport, UrllibTransport, build_headers, parse_api_error, urlencode
 from .payload import apply_policy, sanitize_resource_fields
+from .prompt_render_client import PromptRenderClient, RenderedPrompt
 from .resolver import Resolution
-from .resolver import prompt_names as _prompt_names
 from .resolver import resolve as _resolve
-from .snapshot_data import UseCaseDocument
+from .resolver import template_names as _template_names
+from .snapshot_data import PromptDocument
 from .store import SnapshotStore
 from .template import render as render_template
 from .template import render_messages
-from .use_case_prompt_client import FilledPrompt, UseCasePromptClient
 from .uuidv7 import uuid7
 
-__all__ = ["PromptOn", "UseCase"]
+__all__ = ["Prompt", "PromptOn"]
 
 log = logging.getLogger("prompton")
 
@@ -59,8 +59,8 @@ class _TrackLog:
         return value
 
 
-class UseCase:
-    """A resolved use case with rendering and tracking helpers."""
+class Prompt:
+    """A resolved prompt with rendering and tracking helpers."""
 
     def __init__(self, client: PromptOn, resolution: Resolution) -> None:
         self._client = client
@@ -99,16 +99,16 @@ class UseCase:
         return self._resolution.deployment
 
     @property
-    def prompt_names(self) -> tuple[str, ...]:
-        return self._resolution.prompt_names
+    def template_names(self) -> tuple[str, ...]:
+        return self._resolution.template_names
 
     @property
     def source(self) -> str:
         return self._resolution.source
 
     @property
-    def prompt(self) -> str | None:
-        return self._resolution.prompt
+    def template(self) -> str | None:
+        return self._resolution.template
 
     @property
     def prompt_version(self) -> dict[str, Any] | None:
@@ -123,13 +123,13 @@ class UseCase:
         }
 
     def messages(
-        self, variables: Mapping[str, Any] | None = None, *, prompt: str | None = None
+        self, variables: Mapping[str, Any] | None = None, *, template: str | None = None
     ) -> list[dict[str, Any]]:
-        """Render this use case as chat messages."""
-        resolution = self._selected(prompt)
+        """Render this prompt as chat messages."""
+        resolution = self._selected(template)
         if resolution.kind != "chat" or resolution.messages is None:
             raise NoTemplateError(
-                f"use case {resolution.use_case!r} is kind {resolution.kind!r}, not 'chat'"
+                f"prompt {resolution.prompt_key!r} is kind {resolution.kind!r}, not 'chat'"
             )
         messages = render_messages(resolution.messages, variables, resolution.engine)
         self._commit(resolution)
@@ -139,12 +139,14 @@ class UseCase:
     def decision(self) -> dict[str, Any] | None:
         return self._resolution.decision
 
-    def text(self, variables: Mapping[str, Any] | None = None, *, prompt: str | None = None) -> str:
-        """Render this use case as a text prompt."""
-        resolution = self._selected(prompt)
+    def text(
+        self, variables: Mapping[str, Any] | None = None, *, template: str | None = None
+    ) -> str:
+        """Render this prompt as a text prompt."""
+        resolution = self._selected(template)
         if resolution.kind != "text" or resolution.text_template is None:
             raise NoTemplateError(
-                f"use case {resolution.use_case!r} is kind {resolution.kind!r}, not 'text'"
+                f"prompt {resolution.prompt_key!r} is kind {resolution.kind!r}, not 'text'"
             )
         text = render_template(resolution.text_template, variables, resolution.engine)
         self._commit(resolution)
@@ -156,10 +158,10 @@ class UseCase:
             return self._client._track_call(self._resolution, call, **meta)
         return self._client._track_context(self._resolution, **meta)
 
-    def _selected(self, prompt: str | None) -> Resolution:
-        if prompt is None or prompt == self._resolution.prompt:
+    def _selected(self, template: str | None) -> Resolution:
+        if template is None or template == self._resolution.template:
             return self._resolution
-        return self._client._resolve(key=self._resolution.use_case, prompt=prompt)
+        return self._client._resolve(key=self._resolution.prompt_key, template=template)
 
     def _commit(self, resolution: Resolution) -> None:
         self._resolution = resolution
@@ -173,8 +175,8 @@ class PromptOn:
     :meth:`close` (or use it as a context manager) at shutdown so the last logs are sent.
 
     >>> client = PromptOn(api_key="ptn_myproject_...")           # doctest: +SKIP
-    >>> use_case = client.use_case("support_reply")              # doctest: +SKIP
-    >>> messages = use_case.messages({"question": "..."})        # doctest: +SKIP
+    >>> prompt = client.prompt("support_reply")              # doctest: +SKIP
+    >>> messages = prompt.messages({"question": "..."})        # doctest: +SKIP
     """
 
     def __init__(
@@ -188,7 +190,7 @@ class PromptOn:
         self.config = config or Config.build(**options)
         self._transport = transport or UrllibTransport()
         self._store = SnapshotStore(self.config, self._transport)
-        self._use_case_prompt_client = UseCasePromptClient(self.config, self._transport)
+        self._prompt_render_client = PromptRenderClient(self.config, self._transport)
         self._buffer = LogBuffer(self.config, self._transport)
         self._captured: list[dict[str, Any]] = []
         self._captured_events: list[dict[str, Any]] = []
@@ -234,59 +236,59 @@ class PromptOn:
 
     # -- resolving ---------------------------------------------------------
 
-    def use_case(self, key: str, prompt: str | None = None) -> UseCase:
+    def prompt(self, key: str, template: str | None = None) -> Prompt:
         """Which prompt version, model and params to use for this call site.
 
         Served from memory within the cache TTL, with no HTTP call. Raises
-        :class:`~prompton.errors.UnknownUseCaseError`, :class:`~prompton.errors.UnresolvedError`
-        or :class:`~prompton.errors.UnknownPromptError` for a mistake in the app or the deployment,
-        and :class:`~prompton.errors.UseCaseDocumentUnavailableError` only when PromptOn is
-        unreachable *and* nothing is cached.
+        :class:`~prompton.errors.UnknownPromptError`, :class:`~prompton.errors.UnresolvedError`
+        or :class:`~prompton.errors.UnknownTemplateError` for a mistake in the app or the
+        deployment, and :class:`~prompton.errors.PromptDocumentUnavailableError` only when
+        PromptOn is unreachable *and* nothing is cached.
         """
-        return UseCase(self, self._resolve(key=key, prompt=prompt))
+        return Prompt(self, self._resolve(key=key, template=template))
 
-    def _resolve(self, *, key: str, prompt: str | None = None) -> Resolution:
+    def _resolve(self, *, key: str, template: str | None = None) -> Resolution:
         entry = self._store.current(key)
         return _resolve(
             entry.data,
             key,
-            prompt,
+            template,
             source=entry.source,
             etag=entry.etag,
         )
 
-    def prompt_names(self, use_case: str) -> list[str]:
-        """The prompt names the live deployment pins - exactly what ``use_case`` accepts."""
-        return _prompt_names(self._store.current(use_case).data, use_case)
+    def template_names(self, prompt_key: str) -> list[str]:
+        """The template names the live deployment pins - exactly what ``prompt`` accepts."""
+        return _template_names(self._store.current(prompt_key).data, prompt_key)
 
-    def filled_prompt(
+    def render_prompt(
         self,
-        use_case: str,
+        prompt_key: str,
         *,
-        prompt: str | None = None,
+        template: str | None = None,
         variables: Mapping[str, Any] | None = None,
         environment: str | None = None,
         render_locally: bool = True,
-    ) -> FilledPrompt:
-        """Call the prompt endpoint instead of the local use-case document.
+    ) -> RenderedPrompt:
+        """Call the prompt endpoint instead of the local prompt document.
 
         The simple path and the smoke test. The raw answer is cached for the same TTL as the
-        use-case document and rendered locally, so this stays cheap when you call it repeatedly.
+        prompt document and rendered locally, so this stays cheap when you call it repeatedly.
         Pass ``render_locally=False`` to let the server render instead - a request every time, and
         the exact reference behaviour.
         """
-        return self._use_case_prompt_client.fill(
-            use_case,
-            prompt=prompt,
+        return self._prompt_render_client.fill(
+            prompt_key,
+            template=template,
             variables=variables,
             environment=environment,
             render_locally=render_locally,
         )
 
-    # -- use-case document -------------------------------------------------
+    # -- prompt document -------------------------------------------------
 
     def refresh(self, *, force: bool = False, key: str | None = None) -> bool:
-        """Fetch one use-case key now, subject to the same 10-second runtime gate.
+        """Fetch one prompt key now, subject to the same 10-second runtime gate.
 
         Normal runtime config fetch is demand-driven per key. Calling ``refresh()`` without a
         key is a compatibility no-op; ``force`` is accepted for older callers but does not bypass
@@ -294,30 +296,30 @@ class PromptOn:
         """
         return self._store.refresh(raise_errors=True, force=force, key=key)
 
-    def use_cases(self) -> UseCaseDocument:
+    def prompts(self) -> PromptDocument:
         """The decoded document currently in use."""
         return self._store.current().data
 
-    def use_cases_info(self) -> dict[str, Any]:
+    def prompts_info(self) -> dict[str, Any]:
         """Where the current document came from and how fresh it is."""
         return self._store.info()
 
-    def export_use_cases(self, path: str | os.PathLike[str]) -> Path:
+    def export_prompts(self, path: str | os.PathLike[str]) -> Path:
         """Write the current document to ``path``, to be committed as a bundle."""
         return self._store.export(path)
 
-    def load_use_cases(
-        self, source: Mapping[str, Any] | UseCaseDocument | str | os.PathLike[str]
+    def load_prompts(
+        self, source: Mapping[str, Any] | PromptDocument | str | os.PathLike[str]
     ) -> None:
         """Put a document straight into memory: a mapping, decoded document, or JSON file."""
-        if isinstance(source, UseCaseDocument):
+        if isinstance(source, PromptDocument):
             self._store.install(source, source_name="manual")
             return
         if isinstance(source, Mapping):
-            self._store.install(UseCaseDocument.from_mapping(source), source_name="manual")
+            self._store.install(PromptDocument.from_mapping(source), source_name="manual")
             return
         raw = Path(source).read_bytes()
-        self._store.install(UseCaseDocument.from_json(raw), raw=raw, source_name="bundle")
+        self._store.install(PromptDocument.from_json(raw), raw=raw, source_name="bundle")
 
     # -- monitoring logs ---------------------------------------------------
 
@@ -355,15 +357,11 @@ class PromptOn:
         )
         if 200 <= response.status < 300:
             result = response.json()
-            event_result = result.get("events") if isinstance(result, dict) else None
-            counters = event_result if isinstance(event_result, dict) else result
             return {
-                "accepted": int(counters.get("accepted") or 0) if isinstance(counters, dict) else 0,
-                "duplicates": (
-                    int(counters.get("duplicates") or 0) if isinstance(counters, dict) else 0
-                ),
-                "rejected": counters.get("rejected")
-                if isinstance(counters, dict) and isinstance(counters.get("rejected"), list)
+                "accepted": int(result.get("accepted") or 0) if isinstance(result, dict) else 0,
+                "duplicates": int(result.get("duplicates") or 0) if isinstance(result, dict) else 0,
+                "rejected": result.get("rejected")
+                if isinstance(result, dict) and isinstance(result.get("rejected"), list)
                 else [],
             }
         raise parse_api_error(response)
@@ -372,35 +370,31 @@ class PromptOn:
         self,
         record: Mapping[str, Any],
         *,
-        use_case: UseCase | None = None,
+        prompt: Prompt | None = None,
         policy: Any = None,
     ) -> str:
         """Enqueue one monitoring log the app built itself, and return its id.
 
         Returns immediately. ``id`` (a UUIDv7), ``sdk`` and ``started_at`` are filled in when
-        absent, and passing ``use_case`` fills in ``source`` and the deployment and
+        absent, and passing ``prompt`` fills in ``source`` and the deployment and
         prompt evidence. Raises ``ValueError`` when a required field is missing - that is a bug in
         the calling code, worth catching straight away; everything after this point (the network,
         the server, a full queue) is counted, never raised.
         """
         item = dict(record)
-        if "prompt_key" not in item and "use_case" in item:
-            item["prompt_key"] = item["use_case"]
-        if "template" not in item and "prompt" in item:
-            item["template"] = item["prompt"]
         item.setdefault("id", uuid7())
         item.setdefault("started_at", iso_timestamp())
         item.setdefault("sdk", {"name": SDK_NAME, "version": VERSION})
 
-        resolution = use_case._resolution if use_case is not None else None
+        resolution = prompt._resolution if prompt is not None else None
         if resolution is not None:
-            item.setdefault("prompt_key", resolution.use_case)
+            item.setdefault("prompt_key", resolution.prompt_key)
             item.setdefault("kind", resolution.kind)
             item.setdefault("model", resolution.model)
             item.setdefault("source", resolution.source)
             for key, value in (
                 ("deployment_revision", resolution.deployment_revision),
-                ("template", resolution.prompt),
+                ("template", resolution.template),
                 ("prompt_version_number", resolution.prompt_version_number),
                 ("provider", resolution.provider),
             ):
@@ -414,7 +408,7 @@ class PromptOn:
         ]
         if missing:
             raise ValueError(
-                f"a monitoring log needs {', '.join(missing)}; pass use_case= to fill in "
+                f"a monitoring log needs {', '.join(missing)}; pass prompt= to fill in "
                 "prompt and model evidence"
             )
         if item["status"] not in ("ok", "error"):
@@ -429,8 +423,8 @@ class PromptOn:
         entry = self._store.peek()
         if entry is None:
             return None
-        use_case = entry.data.use_cases.get(str(item.get("prompt_key") or item.get("use_case")))
-        return use_case.payload_policy if use_case else None
+        prompt_key = entry.data.prompts.get(str(item.get("prompt_key")))
+        return prompt_key.payload_policy if prompt_key else None
 
     def _enqueue(self, item: dict[str, Any], policy: Any) -> None:
         if _closed_transport_log(item):
@@ -532,9 +526,9 @@ class PromptOn:
 
     @contextlib.contextmanager
     def _track_context(self, resolution: Resolution, **meta: Any) -> Iterator[_TrackLog]:
-        """Context-manager form of :meth:`UseCase.track`.
+        """Context-manager form of :meth:`Prompt.track`.
 
-        >>> with use_case.track(variables=variables) as log:   # doctest: +SKIP
+        >>> with prompt_key.track(variables=variables) as log:   # doctest: +SKIP
         ...     answer = my_provider(...)
         ...     log.result(Result(content=answer.text, finish_reason=answer.stop))
         """

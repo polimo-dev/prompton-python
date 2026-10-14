@@ -7,13 +7,13 @@ import pytest
 from prompton import template
 from prompton.errors import RenderError
 from prompton.resolver import resolve
-from prompton.snapshot_data import UseCaseDocument
+from prompton.snapshot_data import PromptDocument
 
 SLOT_ERROR = "Message slots are not supported; compose conversation history in app code."
 
 
 def test_schema1_tools_are_preserved_and_message_slots_are_rejected() -> None:
-    doc = UseCaseDocument.from_mapping(
+    doc = PromptDocument.from_mapping(
         {
             "schema_version": 1,
             "prompts": {"chat": {"kind": "chat", "default_params": {}}},
@@ -133,7 +133,7 @@ def test_native_messages_are_preserved_and_app_history_is_composed_explicitly() 
 
 def test_preview_http_contract_slot_fixture_is_rejected_and_tools_survive() -> None:
     fixture = json.loads((Path(__file__).parent / "conformance" / "http_contract.json").read_text())
-    doc = UseCaseDocument.from_mapping(fixture["snapshot"])
+    doc = PromptDocument.from_mapping(fixture["snapshot"])
     resolution = resolve(doc, fixture["render"]["key"])
 
     with pytest.raises(RenderError, match=re.escape(SLOT_ERROR)):

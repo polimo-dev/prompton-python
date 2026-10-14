@@ -6,8 +6,12 @@ import pytest
 
 import prompton
 from prompton import PromptOn, ProviderError, Result
-from prompton.errors import MissingVariableError, NoTemplateError, UnknownUseCaseError
-from prompton.testing import make_use_case_document
+from prompton.errors import (
+    MissingVariableError,
+    NoTemplateError,
+    UnknownPromptError,
+)
+from prompton.testing import make_prompt_document
 
 from .conftest import FakeTransport, json_response, readable_document
 
@@ -15,55 +19,56 @@ from .conftest import FakeTransport, json_response, readable_document
 @pytest.fixture
 def client(snapshot_document):
     instance = PromptOn(mode="test", api_key=None, disk_cache=False, host="http://localhost:4000")
-    instance.load_use_cases(snapshot_document)
+    instance.load_prompts(snapshot_document)
     yield instance
     instance.close(timeout=0.1)
 
 
 class TestResolveAndRender:
-    def test_use_case_then_messages(self, client):
-        use_case = client.use_case("greeting")
-        assert use_case.key == "greeting"
-        assert use_case.model == "openai/gpt-4o-mini"
-        assert use_case.params == {"temperature": 0.2, "max_tokens": 256}
-        assert use_case.messages({"name": "Ada"})[1]["content"] == "Say hello to Ada."
+    def test_prompt_key_then_messages(self, client):
+        prompt_key = client.prompt("greeting")
+        assert prompt_key.key == "greeting"
+        assert prompt_key.model == "openai/gpt-4o-mini"
+        assert prompt_key.params == {"temperature": 0.2, "max_tokens": 256}
+        assert prompt_key.messages({"name": "Ada"})[1]["content"] == "Say hello to Ada."
 
     def test_a_named_prompt_is_how_language_branching_works(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
         assert (
-            use_case.messages({"name": "아다"}, prompt="ko")[0]["content"] == "아다님에게 인사해줘."
+            prompt_key.messages({"name": "아다"}, template="ko")[0]["content"]
+            == "아다님에게 인사해줘."
         )
 
     def test_text_and_embedding_kinds(self, client):
-        text = client.use_case("summarize").text({"items": ["a", "b"]})
+        text = client.prompt("summarize").text({"items": ["a", "b"]})
         assert text == "Summarize:\n- a\n- b\n"
         with pytest.raises(NoTemplateError):
-            client.use_case("embed").messages({})
+            client.prompt("embed").messages({})
         with pytest.raises(NoTemplateError):
-            client.use_case("greeting").text({"name": "Ada"})
+            client.prompt("greeting").text({"name": "Ada"})
 
-    def test_prompt_names_lists_exactly_what_resolve_accepts(self, client):
-        assert client.prompt_names("greeting") == ["default", "ko"]
-        for name in client.prompt_names("greeting"):
-            assert client.use_case("greeting", name).prompt == name
+    def test_template_names_lists_exactly_what_resolve_accepts(self, client):
+        assert client.template_names("greeting") == ["default", "ko"]
+        for name in client.template_names("greeting"):
+            assert client.prompt("greeting", name).template == name
 
-    def test_an_unknown_use_case_is_an_error_not_a_fallback(self, client):
-        with pytest.raises(UnknownUseCaseError):
-            client.use_case("nope")
+    def test_an_unknown_template_key_is_an_error_not_a_fallback(self, client):
+        with pytest.raises(UnknownPromptError):
+            client.prompt("nope")
 
 
 class TestWithGeneration:
     def test_a_successful_call_is_logged_with_the_resolution_evidence(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
         variables = {"name": "Ada"}
-        managed_messages = use_case.messages(variables)
+        managed_messages = prompt_key.messages(variables)
         app_history = [{"role": "assistant", "content": "Previous answer."}]
         input_messages = [
             managed_messages[0],
             *app_history,
             {"role": "user", "content": "Say hello to Ada."},
         ]
-        result = use_case.track(
+        result = prompt_key.track(
             lambda: Result(
                 content="Hello, Ada!",
                 finish_reason="stop",
@@ -89,7 +94,7 @@ class TestWithGeneration:
         assert "deployment_id" not in logged
         assert "prompt_version_id" not in logged
         assert "model_id" not in logged
-        assert logged["prompt_version_number"] == use_case.prompt_version["number"]
+        assert logged["prompt_version_number"] == prompt_key.prompt_version["number"]
         assert logged["source"] == "manual"
         assert logged["usage"]["cost_source"] == "provider"
         assert logged["input"]["variables"] == {"name": "Ada"}
@@ -101,12 +106,12 @@ class TestWithGeneration:
 
     def test_schema8_logs_readable_evidence_and_retains_event_ids(self, snapshot_document):
         client = PromptOn(mode="test", api_key=None, disk_cache=False, host="http://localhost:4000")
-        client.load_use_cases(readable_document(snapshot_document))
-        use_case = client.use_case("greeting")
-        assert use_case.model_id is None
-        assert use_case.prompt_version == {"id": None, "number": 1}
+        client.load_prompts(readable_document(snapshot_document))
+        prompt = client.prompt("greeting")
+        assert prompt.model_id is None
+        assert prompt.prompt_version == {"id": None, "number": 1}
         event_id = client.log(
-            {"id": "0198f2a1-0000-7000-8000-00000000ffff", "status": "ok"}, use_case=use_case
+            {"id": "0198f2a1-0000-7000-8000-00000000ffff", "status": "ok"}, prompt=prompt
         )
         assert event_id == "0198f2a1-0000-7000-8000-00000000ffff"
         [logged] = client.captured
@@ -121,39 +126,40 @@ class TestWithGeneration:
         client.close(timeout=0.1)
 
     def test_named_prompt_render_updates_following_track_evidence(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
 
         assert (
-            use_case.messages({"name": "아다"}, prompt="ko")[0]["content"] == "아다님에게 인사해줘."
+            prompt_key.messages({"name": "아다"}, template="ko")[0]["content"]
+            == "아다님에게 인사해줘."
         )
-        use_case.track(lambda: Result(content="안녕", finish_reason="stop"))
+        prompt_key.track(lambda: Result(content="안녕", finish_reason="stop"))
 
         [logged] = client.captured
         assert logged["template"] == "ko"
-        assert logged["prompt_version_number"] == use_case.prompt_version["number"]
+        assert logged["prompt_version_number"] == prompt_key.prompt_version["number"]
         assert "prompt_version_id" not in logged
 
     def test_failed_named_prompt_render_does_not_poison_following_track_evidence(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
 
         with pytest.raises(MissingVariableError):
-            use_case.messages({}, prompt="ko")
-        use_case.track(lambda: Result(content="Hello", finish_reason="stop"))
+            prompt_key.messages({}, template="ko")
+        prompt_key.track(lambda: Result(content="Hello", finish_reason="stop"))
 
         [logged] = client.captured
-        assert use_case.prompt == "default"
+        assert prompt_key.template == "default"
         assert logged["template"] == "default"
-        assert logged["prompt_version_number"] == use_case.prompt_version["number"]
+        assert logged["prompt_version_number"] == prompt_key.prompt_version["number"]
         assert "prompt_version_id" not in logged
 
     def test_a_provider_error_is_logged_with_its_kind_and_then_re_raised(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
 
         def call():
             raise ProviderError("rate limited", kind="rate_limited", status=429)
 
         with pytest.raises(ProviderError):
-            use_case.track(call)
+            prompt_key.track(call)
         [logged] = client.captured
         assert logged["status"] == "error"
         assert logged["error"] == {
@@ -164,14 +170,14 @@ class TestWithGeneration:
         assert "output" not in logged
 
     def test_an_error_with_a_result_keeps_the_usage_as_a_quality_signal(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
         result = Result(content='{"a":', finish_reason="length", input_tokens=38, output_tokens=512)
 
         def call():
             raise ProviderError("unexpected end of JSON input", kind="parse", result=result)
 
         with pytest.raises(ProviderError):
-            use_case.track(call)
+            prompt_key.track(call)
         [logged] = client.captured
         assert logged["status"] == "error"
         assert logged["stop_kind"] == "length"
@@ -179,32 +185,32 @@ class TestWithGeneration:
         assert logged["usage"]["output_tokens"] == 512
 
     def test_any_other_exception_is_recorded_as_app_and_propagates_unchanged(self, client):
-        use_case = client.use_case("greeting")
+        prompt_key = client.prompt("greeting")
 
         def call():
             raise ZeroDivisionError("boom")
 
         with pytest.raises(ZeroDivisionError, match="boom"):
-            use_case.track(call)
+            prompt_key.track(call)
         [logged] = client.captured
         assert logged["error"]["kind"] == "app"
         assert "ZeroDivisionError" in logged["error"]["message"]
 
     def test_a_plain_string_return_value_is_treated_as_the_completion(self, client):
-        client.use_case("greeting").track(lambda: "hi there")
+        client.prompt("greeting").track(lambda: "hi there")
         assert client.captured[0]["output"] == {"content": "hi there"}
 
     def test_the_context_manager_form_records_the_same_thing(self, client):
-        use_case = client.use_case("greeting")
-        with use_case.track(variables={"name": "Ada"}) as log:
+        prompt_key = client.prompt("greeting")
+        with prompt_key.track(variables={"name": "Ada"}) as log:
             log.result(Result(content="Hello", finish_reason="stop"))
         [logged] = client.captured
         assert logged["status"] == "ok"
         assert logged["output"]["content"] == "Hello"
 
     def test_the_context_manager_records_an_exception_and_re_raises(self, client):
-        use_case = client.use_case("greeting")
-        with pytest.raises(RuntimeError), use_case.track():
+        prompt_key = client.prompt("greeting")
+        with pytest.raises(RuntimeError), prompt_key.track():
             raise RuntimeError("nope")
         assert client.captured[0]["status"] == "error"
 
@@ -213,7 +219,7 @@ class TestLog:
     def test_a_hand_built_record_is_completed_and_captured(self, client):
         record_id = client.log(
             {
-                "use_case": "summarize",
+                "prompt_key": "summarize",
                 "model": "openai/gpt-4o-mini",
                 "status": "ok",
                 "kind": "text",
@@ -228,13 +234,13 @@ class TestLog:
         assert logged["sdk"]["name"] == "prompton-python"
 
     def test_a_resolution_fills_in_the_evidence(self, client):
-        use_case = client.use_case("greeting")
-        client.log({"status": "ok"}, use_case=use_case)
+        prompt_key = client.prompt("greeting")
+        client.log({"status": "ok"}, prompt=prompt_key)
         [logged] = client.captured
         assert logged["prompt_key"] == "greeting"
-        assert logged["model"] == use_case.model
-        assert logged["deployment_revision"] == use_case.deployment["revision"]
-        assert logged["prompt_version_number"] == use_case.prompt_version["number"]
+        assert logged["model"] == prompt_key.model
+        assert logged["deployment_revision"] == prompt_key.deployment["revision"]
+        assert logged["prompt_version_number"] == prompt_key.prompt_version["number"]
         assert logged["source"] == "manual"
         assert "deployment_id" not in logged
         assert "prompt_version_id" not in logged
@@ -257,13 +263,13 @@ class TestLog:
         assert "model_id" not in logged
 
     def test_a_missing_required_field_is_a_bug_in_the_caller(self, client):
-        with pytest.raises(ValueError, match="use_case"):
+        with pytest.raises(ValueError, match="prompt_key"):
             client.log({"model": "m", "status": "ok"})
         with pytest.raises(ValueError, match="status"):
-            client.log({"use_case": "u", "model": "m", "status": "maybe"})
+            client.log({"prompt_key": "u", "model": "m", "status": "maybe"})
 
-    def test_the_use_case_payload_policy_is_applied_before_the_record_is_queued(self):
-        document = make_use_case_document(
+    def test_the_prompt_key_payload_policy_is_applied_before_the_record_is_queued(self):
+        document = make_prompt_document(
             secret={
                 "model": "openai/gpt-4o-mini",
                 "messages": [{"role": "user", "content": "hi"}],
@@ -271,8 +277,8 @@ class TestLog:
             }
         )
         client = PromptOn(mode="test", disk_cache=False)
-        client.load_use_cases(document)
-        client.use_case("secret").track(
+        client.load_prompts(document)
+        client.prompt("secret").track(
             lambda: Result(content="a secret answer"),
             variables={"question": "a secret question"},
         )
@@ -288,8 +294,8 @@ class TestLog:
             hash_end_user=True,
             redact=lambda record: {**record, "input": {"text": "[redacted]"}},
         )
-        client.load_use_cases(snapshot_document)
-        client.use_case("greeting").track(
+        client.load_prompts(snapshot_document)
+        client.prompt("greeting").track(
             lambda: Result(content="hi"),
             variables={"name": "Ada"},
             end_user_ref="user-42",
@@ -308,15 +314,15 @@ class TestLog:
             disk_cache=False,
             redact=lambda record: seen.append(record) or record,
         )
-        client.load_use_cases(snapshot_document)
-        use_case = client.use_case("greeting")
+        client.load_prompts(snapshot_document)
+        prompt = client.prompt("greeting")
         closed = ProviderError(
             "failed to send request: %Req.TransportError{reason: :closed}",
             kind="transport",
         )
 
         with pytest.raises(ProviderError) as error:
-            use_case.track(lambda: (_ for _ in ()).throw(closed))
+            prompt.track(lambda: (_ for _ in ()).throw(closed))
 
         assert error.value is closed
         assert client.captured == []
@@ -324,10 +330,10 @@ class TestLog:
         client.close(timeout=0.1)
 
     def test_other_transport_errors_are_still_captured(self, client):
-        use_case = client.use_case("greeting")
+        prompt = client.prompt("greeting")
 
         with pytest.raises(ProviderError):
-            use_case.track(
+            prompt.track(
                 lambda: (_ for _ in ()).throw(ProviderError("connection refused", kind="transport"))
             )
 
@@ -337,8 +343,8 @@ class TestLog:
 
 
 class TestSnapshotSurface:
-    def test_use_cases_info_reports_the_tier(self, client):
-        info = client.use_cases_info()
+    def test_prompts_info_reports_the_tier(self, client):
+        info = client.prompts_info()
         assert info["source"] == "manual"
         assert info["environment"] == "production"
 
@@ -354,7 +360,7 @@ class TestSnapshotSurface:
             transport=transport,
         )
         assert client._store.refresh_all(raise_errors=True, force=True) is True
-        bundle = client.export_use_cases(tmp_path / "bundle.json")
+        bundle = client.export_prompts(tmp_path / "bundle.json")
         assert json.loads(bundle.read_text())["project"] == "sdkfixture"
 
         offline = PromptOn(
@@ -365,7 +371,7 @@ class TestSnapshotSurface:
             disk_cache=False,
             bundle=str(bundle),
         )
-        assert offline.use_case("greeting").source == "bundle"
+        assert offline.prompt("greeting").source == "bundle"
         client.close(timeout=0.1)
         offline.close(timeout=0.1)
 
@@ -374,8 +380,8 @@ class TestModuleLevelClient:
     def test_configure_replaces_the_default_and_close_clears_it(self, snapshot_document):
         client = prompton.configure(mode="test", disk_cache=False)
         try:
-            client.load_use_cases(snapshot_document)
-            assert prompton.use_case("greeting").model == "openai/gpt-4o-mini"
+            client.load_prompts(snapshot_document)
+            assert prompton.prompt("greeting").model == "openai/gpt-4o-mini"
             assert prompton.get_client() is client
             replacement = prompton.configure(mode="test", disk_cache=False)
             assert prompton.get_client() is replacement
@@ -413,17 +419,7 @@ class TestTraceEvents:
 
     def test_posts_trace_events_to_logs_endpoint(self):
         transport = FakeTransport()
-        transport.push(
-            json_response(
-                202,
-                {
-                    "accepted": 1,
-                    "duplicates": 0,
-                    "rejected": [],
-                    "events": {"accepted": 2, "duplicates": 0, "rejected": []},
-                },
-            )
-        )
+        transport.push(json_response(202, {"accepted": 1, "duplicates": 0, "rejected": []}))
         client = PromptOn(
             mode="live",
             api_key="ptn_sdkfixture_key",
@@ -435,7 +431,7 @@ class TestTraceEvents:
         )
         event = self.event()
 
-        assert client.log_events([event]) == {"accepted": 2, "duplicates": 0, "rejected": []}
+        assert client.log_events([event]) == {"accepted": 1, "duplicates": 0, "rejected": []}
 
         [request] = transport.generation_requests
         assert request["method"] == "POST"

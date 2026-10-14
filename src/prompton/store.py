@@ -8,7 +8,7 @@ is reported as ``source``.
 The runtime config rules this file implements are demand-driven:
 
 * startup and idle periods load only local files and do not fetch remote config;
-* each use-case key keeps its own cached document, freshness timestamp, ETag and in-flight fetch;
+* each prompt key keeps its own cached document, freshness timestamp, ETag and in-flight fetch;
 * a remote config attempt is allowed at most once per key per cache TTL, including failures;
 * each config attempt has a one-second total budget and no SDK retry;
 * failed attempts serve the last valid key-specific document, even when it is expired;
@@ -31,7 +31,7 @@ from urllib.parse import quote
 
 from . import _fork
 from .config import Config
-from .errors import PromptOnError, TransportError, UseCaseDocumentUnavailableError
+from .errors import PromptDocumentUnavailableError, PromptOnError, TransportError
 from .http import (
     HttpResponse,
     Transport,
@@ -39,7 +39,7 @@ from .http import (
     parse_api_error,
     urlencode,
 )
-from .snapshot_data import UseCaseDocument
+from .snapshot_data import PromptDocument
 
 __all__ = ["SnapshotEntry", "SnapshotStore"]
 
@@ -54,7 +54,7 @@ Source = Literal["remote", "disk", "bundle", "manual"]
 class SnapshotEntry:
     """One cached snapshot document plus where it came from and how fresh it is."""
 
-    data: UseCaseDocument
+    data: PromptDocument
     raw: bytes
     source: Source
     etag: str | None = None
@@ -100,7 +100,7 @@ class SnapshotStore:
     def start(self) -> None:
         """Load the local tiers. Remote config fetches are demand-driven."""
         if self._config.mode == "test":
-            # test mode is deterministic: only load_use_cases() puts a document here
+            # test mode is deterministic: only load_prompts() puts a document here
             return
         self.load_local()
         if not self._config.remote_enabled:
@@ -115,7 +115,7 @@ class SnapshotStore:
             return
         _fork.register(self)
         self._poll_thread = threading.Thread(
-            target=self._poll_loop, name="prompton-use-cases", daemon=True
+            target=self._poll_loop, name="prompton-prompts", daemon=True
         )
         self._poll_thread.start()
 
@@ -154,14 +154,14 @@ class SnapshotStore:
 
     # -- reading -----------------------------------------------------------
 
-    def current(self, use_case: str | None = None) -> SnapshotEntry:
+    def current(self, prompt_key: str | None = None) -> SnapshotEntry:
         """The document to resolve against, refreshing in the background when it is stale.
 
-        Raises :class:`~prompton.errors.UseCaseDocumentUnavailableError` only when no tier has
+        Raises :class:`~prompton.errors.PromptDocumentUnavailableError` only when no tier has
         anything.
         """
-        if use_case is not None:
-            return self._current_for_key(use_case)
+        if prompt_key is not None:
+            return self._current_for_key(prompt_key)
 
         with self._lock:
             entry = self._entry
@@ -181,67 +181,70 @@ class SnapshotStore:
         if scope_error is not None:
             # a document was found, it just is not this client's: say so instead of blaming
             # the network, which is working fine
-            raise UseCaseDocumentUnavailableError(scope_error)
+            raise PromptDocumentUnavailableError(scope_error)
         if self._config.mode == "test":
-            raise UseCaseDocumentUnavailableError(
-                "test mode serves only the document you load: call load_use_cases(...) first "
-                "(prompton.testing.make_use_case_document builds one)"
+            raise PromptDocumentUnavailableError(
+                "test mode serves only the document you load: call load_prompts(...) first "
+                "(prompton.testing.make_prompt_document builds one)"
             )
         opening = (
             "offline mode makes no remote calls and nothing is cached"
             if self._config.mode == "offline"
             else "PromptOn is unreachable and nothing is cached"
         )
-        raise UseCaseDocumentUnavailableError(
+        raise PromptDocumentUnavailableError(
             f"{opening}: no snapshot in memory, on disk "
             f"({self._config.disk_cache_path or 'disabled'}) or in a bundle "
             f"({self._config.bundle_path or 'none'}) for environment "
             f"{self._config.environment!r}"
         )
 
-    def _current_for_key(self, use_case: str) -> SnapshotEntry:
+    def _current_for_key(self, prompt_key: str) -> SnapshotEntry:
         now = time.monotonic()
         with self._lock:
-            entry = self._entries.get(use_case)
-            local = self._local_entry_for_key(use_case)
+            entry = self._entries.get(prompt_key)
+            local = self._local_entry_for_key(prompt_key)
             cached = entry or local
-            if entry is not None and now - self._last_success.get(use_case, 0.0) < CONFIG_FETCH_TTL:
+            if (
+                entry is not None
+                and now - self._last_success.get(prompt_key, 0.0) < CONFIG_FETCH_TTL
+            ):
                 return entry
         if cached is None:
-            loaded = self._load_local_for_key(use_case)
+            loaded = self._load_local_for_key(prompt_key)
             if loaded is not None:
                 with self._lock:
-                    self._entries.setdefault(use_case, loaded)
+                    self._entries.setdefault(prompt_key, loaded)
                     self._entry = loaded
-                    entry = self._entries.get(use_case)
-                    local = self._local_entry_for_key(use_case)
+                    entry = self._entries.get(prompt_key)
+                    local = self._local_entry_for_key(prompt_key)
                     cached = entry or local
         with self._lock:
             if not self._config.remote_enabled:
                 if cached is not None:
                     return cached
                 return self.current(None)
-        self._refresh_key(use_case, raise_errors=False)
+        self._refresh_key(prompt_key, raise_errors=False)
         with self._lock:
-            entry = self._entries.get(use_case)
-            local = self._local_entry_for_key(use_case)
+            entry = self._entries.get(prompt_key)
+            local = self._local_entry_for_key(prompt_key)
             cached = entry or local
-            error = self._last_error_by_key.get(use_case)
+            error = self._last_error_by_key.get(prompt_key)
         if cached is not None:
             return cached
         if isinstance(error, PromptOnError) and not isinstance(error, TransportError):
-            raise UseCaseDocumentUnavailableError(str(error))
-        raise UseCaseDocumentUnavailableError(
-            f"PromptOn is unreachable and nothing is cached for {use_case!r}: {error}"
+            raise PromptDocumentUnavailableError(str(error))
+        raise PromptDocumentUnavailableError(
+            f"PromptOn is unreachable and nothing is cached for {prompt_key!r}: {error}"
         )
 
-    def _local_entry_for_key(self, use_case: str) -> SnapshotEntry | None:
+    def _local_entry_for_key(self, prompt_key: str) -> SnapshotEntry | None:
         entry = self._entry
         if entry is None:
             return None
-        if entry.cache_key is not None and entry.cache_key != use_case:
+        if entry.cache_key is not None and entry.cache_key != prompt_key:
             return None
-        if use_case in entry.data.use_cases or entry.cache_key is None:
+        if prompt_key in entry.data.prompts or entry.cache_key is None:
             return entry
         return None
 
@@ -298,23 +301,23 @@ class SnapshotStore:
                 return entry
         return None
 
-    def _load_local_for_key(self, use_case: str) -> SnapshotEntry | None:
-        for path, source in self._local_candidates(use_case):
+    def _load_local_for_key(self, prompt_key: str) -> SnapshotEntry | None:
+        for path, source in self._local_candidates(prompt_key):
             entry = self._read_file(path, source)
-            if entry is None or use_case not in entry.data.use_cases:
+            if entry is None or prompt_key not in entry.data.prompts:
                 continue
             if self._config.disk_cache_path is not None and path == _key_cache_path(
-                self._config.disk_cache_path, use_case
+                self._config.disk_cache_path, prompt_key
             ):
-                entry.cache_key = use_case
-            log.info("prompton: loaded use case %s from %s (%s)", use_case, source, path)
+                entry.cache_key = prompt_key
+            log.info("prompton: loaded prompt %s from %s (%s)", prompt_key, source, path)
             return entry
         return None
 
-    def _local_candidates(self, use_case: str | None = None) -> list[tuple[Path, Source]]:
+    def _local_candidates(self, prompt_key: str | None = None) -> list[tuple[Path, Source]]:
         candidates: list[tuple[Path, Source]] = []
-        if self._config.disk_cache_path is not None and use_case is not None:
-            candidates.append((_key_cache_path(self._config.disk_cache_path, use_case), "disk"))
+        if self._config.disk_cache_path is not None and prompt_key is not None:
+            candidates.append((_key_cache_path(self._config.disk_cache_path, prompt_key), "disk"))
         if self._config.disk_cache_path is not None:
             candidates.append((self._config.disk_cache_path, "disk"))
         if self._config.bundle_path is not None:
@@ -330,7 +333,7 @@ class SnapshotStore:
             log.warning("prompton: could not read the %s snapshot %s: %s", source, path, error)
             return None
         try:
-            data = UseCaseDocument.from_json(raw)
+            data = PromptDocument.from_json(raw)
         except PromptOnError as error:
             # A corrupt, partial or outdated file is ignored, never raised.
             log.warning("prompton: ignoring the %s snapshot %s: %s", source, path, error)
@@ -349,7 +352,7 @@ class SnapshotStore:
             stale_since=time.monotonic(),
         )
 
-    def _matches_scope(self, data: UseCaseDocument, path: Path, source: Source) -> bool:
+    def _matches_scope(self, data: PromptDocument, path: Path, source: Source) -> bool:
         """A snapshot for another environment or project is never used.
 
         The reason is kept, because "PromptOn is unreachable" is the wrong thing to tell someone
@@ -403,9 +406,9 @@ class SnapshotStore:
     def refresh(
         self, *, raise_errors: bool = True, force: bool = False, key: str | None = None
     ) -> bool:
-        """Fetch one use-case key once, subject to the fixed runtime attempt gate.
+        """Fetch one prompt key once, subject to the fixed runtime attempt gate.
 
-        Normal runtime config fetch is demand-driven per key. A no-key refresh is a
+        Normal runtime config fetch is demand-driven per prompt key. A no-key refresh is a
         compatibility no-op, and ``force`` is kept for older callers without bypassing the
         keyed 10-second attempt gate. Bulk document fetch remains available through
         :meth:`refresh_all` for explicit export/CLI flows only.
@@ -418,13 +421,13 @@ class SnapshotStore:
         """Fetch the aggregate document for explicit export and CLI commands."""
         return self._refresh_remote(raise_errors=raise_errors, force=force, key=None, deadline=None)
 
-    def _refresh_key(self, use_case: str, *, raise_errors: bool) -> bool:
+    def _refresh_key(self, prompt_key: str, *, raise_errors: bool) -> bool:
         if self._config.mode == "test":
             return False
         if not self._config.remote_enabled:
             self._warn_no_remote()
             if raise_errors:
-                raise UseCaseDocumentUnavailableError(
+                raise PromptDocumentUnavailableError(
                     "no API key configured: set PTN_API_KEY or pass api_key= to use the network"
                 )
             return False
@@ -432,28 +435,28 @@ class SnapshotStore:
         now = time.monotonic()
         deadline = now + CONFIG_FETCH_TIMEOUT
         with self._lock:
-            inflight = self._inflight.get(use_case)
+            inflight = self._inflight.get(prompt_key)
             if inflight is not None:
                 condition, owner_deadline = inflight
-                while use_case in self._inflight:
+                while prompt_key in self._inflight:
                     remaining = owner_deadline - time.monotonic()
                     if remaining <= 0:
                         break
                     condition.wait(timeout=remaining)
                 return False
-            attempt = self._last_attempt.get(use_case, 0.0)
+            attempt = self._last_attempt.get(prompt_key, 0.0)
             if attempt and now - attempt < CONFIG_FETCH_TTL:
                 return False
             condition = threading.Condition(self._lock)
-            self._inflight[use_case] = (condition, deadline)
-            self._last_attempt[use_case] = now
+            self._inflight[prompt_key] = (condition, deadline)
+            self._last_attempt[prompt_key] = now
         try:
             return self._refresh_remote(
-                raise_errors=raise_errors, force=False, key=use_case, deadline=deadline
+                raise_errors=raise_errors, force=False, key=prompt_key, deadline=deadline
             )
         finally:
             with self._lock:
-                inflight = self._inflight.pop(use_case, None)
+                inflight = self._inflight.pop(prompt_key, None)
                 if inflight is not None:
                     condition, _deadline = inflight
                     condition.notify_all()
@@ -475,7 +478,7 @@ class SnapshotStore:
                     self._entry = None
                 return self.load_local() is not None
             if raise_errors:
-                raise UseCaseDocumentUnavailableError(
+                raise PromptDocumentUnavailableError(
                     "no API key configured: set PTN_API_KEY or pass api_key= to use the network"
                 )
             return False
@@ -488,7 +491,7 @@ class SnapshotStore:
             if raise_errors:
                 if isinstance(last_error, BaseException):
                     raise last_error
-                raise UseCaseDocumentUnavailableError(
+                raise PromptDocumentUnavailableError(
                     f"PromptOn asked this client to wait {pause:.0f}s before the next snapshot "
                     "request; pass force=True to refresh anyway"
                 )
@@ -577,7 +580,7 @@ class SnapshotStore:
         self, response: HttpResponse, *, key: str | None = None, deadline: float | None = None
     ) -> bool:
         try:
-            data = UseCaseDocument.from_json(response.body)
+            data = PromptDocument.from_json(response.body)
         except PromptOnError as error:
             self._record_failure(error, key=key)
             log.error("prompton: the server returned a snapshot this SDK cannot read: %s", error)
@@ -587,7 +590,7 @@ class SnapshotStore:
                 reason = self._scope_error or "snapshot scope mismatch"
             self._record_failure(PromptOnError(reason), key=key)
             return False
-        if key is not None and key not in data.use_cases:
+        if key is not None and key not in data.prompts:
             self._record_failure(
                 PromptOnError(f"snapshot did not contain requested prompt {key!r}"),
                 key=key,
@@ -736,7 +739,7 @@ class SnapshotStore:
         """Write the current document to ``path`` so it can be committed as a bundle."""
         entry = self.peek()
         if entry is None:
-            raise UseCaseDocumentUnavailableError("no snapshot to export: fetch one first")
+            raise PromptDocumentUnavailableError("no snapshot to export: fetch one first")
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write(target, entry.raw)
@@ -755,9 +758,9 @@ class SnapshotStore:
         return target
 
     def install(
-        self, data: UseCaseDocument, *, raw: bytes | None = None, source_name: Source = "remote"
+        self, data: PromptDocument, *, raw: bytes | None = None, source_name: Source = "remote"
     ) -> None:
-        """Put a document straight into memory. Used by test mode and by ``load_use_cases``."""
+        """Put a document straight into memory. Used by test mode and by ``load_prompts``."""
         with self._lock:
             self._entry = SnapshotEntry(
                 data=data,
@@ -801,8 +804,8 @@ def _sidecar_path(path: Path) -> Path:
     return path.with_name(path.name + ".meta.json")
 
 
-def _key_cache_path(path: Path, use_case: str) -> Path:
-    return path.with_name(f"{path.name}.prompts") / f"{quote(use_case, safe='')}.json"
+def _key_cache_path(path: Path, prompt_key: str) -> Path:
+    return path.with_name(f"{path.name}.prompts") / f"{quote(prompt_key, safe='')}.json"
 
 
 def _read_sidecar(path: Path) -> dict[str, Any]:
