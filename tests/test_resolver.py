@@ -83,6 +83,29 @@ def test_a_dangling_reference_fails_closed(snapshot):
         resolve(UseCaseDocument.from_mapping(document), "greeting")
 
 
+def test_schema1_aggregate_requires_all_keyed_resource_maps():
+    base = {
+        "schema_version": 1,
+        "project": "sdkfixture",
+        "environment": "production",
+        "prompts": {},
+        "deployments": {},
+        "prompt_versions": {},
+        "models": {},
+    }
+    UseCaseDocument.from_mapping(base)
+    for collection in ("deployments", "prompt_versions", "models"):
+        missing = dict(base)
+        missing.pop(collection)
+        with pytest.raises(InvalidUseCaseDocumentError, match="keyed object"):
+            UseCaseDocument.from_mapping(missing)
+
+        array = dict(base)
+        array[collection] = []
+        with pytest.raises(InvalidUseCaseDocumentError, match="keyed object"):
+            UseCaseDocument.from_mapping(array)
+
+
 def test_decodes_variable_definitions_from_variables_and_rejects_old_input_schema_metadata(
     snapshot_document,
 ):
@@ -94,6 +117,13 @@ def test_decodes_variable_definitions_from_variables_and_rejects_old_input_schem
     old["prompts"]["greeting"]["input_schema"] = old["prompts"]["greeting"].pop("variables")
     with pytest.raises(InvalidUseCaseDocumentError, match="not input_schema"):
         UseCaseDocument.from_mapping(old)
+
+
+def test_schema1_prompt_id_is_not_read_from_legacy_uuid_field(snapshot_document):
+    document = readable_document(snapshot_document)
+    document["prompts"]["greeting"]["id"] = "0198f2a1-0000-7000-8000-00000000c001"
+    snapshot = UseCaseDocument.from_mapping(document)
+    assert snapshot.use_cases["greeting"].id is None
 
 
 def test_schema1_readable_resources_have_no_public_resource_ids(snapshot_document):

@@ -179,9 +179,13 @@ class UseCaseDocument:
 
         normalized = _normalize_prompt_document(document)
 
+        for collection in ("prompts", "deployments", "prompt_versions", "models"):
+            if not isinstance(normalized.get(collection), Mapping):
+                raise InvalidUseCaseDocumentError(
+                    f"{collection} is required and must be a keyed object"
+                )
+
         raw_use_cases = normalized.get("prompts")
-        if not isinstance(raw_use_cases, Mapping):
-            raise InvalidUseCaseDocumentError("prompts is required and must be an object")
 
         use_cases = {
             str(key): _decode_use_case(str(key), value, warnings)
@@ -349,7 +353,7 @@ def _enum(value: Any, allowed: tuple[str, ...], default: str, tag: str, warnings
 
 def _decode_use_case(key: str, raw: Mapping[str, Any], warnings: list[str]) -> UseCase:
     return UseCase(
-        id=_as_str(raw.get("id")),
+        id=None,
         key=key,
         kind=_enum(raw.get("kind"), _KINDS, "chat", "unknown_kind", warnings),
         variables=tuple(_decode_variables(raw, warnings)),

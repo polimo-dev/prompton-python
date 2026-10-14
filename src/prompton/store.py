@@ -361,10 +361,25 @@ class SnapshotStore:
             else f"the {source} snapshot {path}"
         )
         reason: str | None = None
-        if data.environment and data.environment != self._config.environment:
+        if source == "remote" and data.environment is None:
+            reason = (
+                f"{where} without an environment but this client is configured for "
+                f"{self._config.environment!r} (PTN_ENVIRONMENT, or environment=)"
+            )
+        elif data.environment and data.environment != self._config.environment:
             reason = (
                 f"{where} for environment {data.environment!r} but this client is configured for "
                 f"{self._config.environment!r} (PTN_ENVIRONMENT, or environment=)"
+            )
+        elif (
+            source == "remote"
+            and data.project is None
+            and self._config.project
+            and self._config.project != "default"
+        ):
+            reason = (
+                f"{where} without a project but this client is configured for project "
+                f"{self._config.project!r} (PTN_PROJECT, or the project slug in the api key)"
             )
         elif (
             data.project

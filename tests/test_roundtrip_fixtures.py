@@ -36,6 +36,13 @@ def test_real_chat_detail_decodes_and_renders_like_the_server() -> None:
     detail = fixture("chat-detail.json")
     variables = fixture("chat-variables.json")
     rendered = fixture("chat-render.json")
+    assert {
+        "name": "question",
+        "type": "string",
+        "required": True,
+        "description": "Question to answer",
+        "example": "refund",
+    } in detail["prompt"]["variables"]
     snapshot = UseCaseDocument.from_mapping(detail)
     resolution = resolve(snapshot, rendered["key"])
 
@@ -52,6 +59,13 @@ def test_real_decision_detail_decodes_and_renders_like_the_server() -> None:
     detail = fixture("decision-detail.json")
     variables = fixture("decision-variables.json")
     rendered = fixture("decision-render.json")
+    assert {
+        "name": "ticket",
+        "type": "string",
+        "required": True,
+        "description": "Ticket summary",
+        "example": "refund",
+    } in detail["prompt"]["variables"]
     snapshot = UseCaseDocument.from_mapping(detail)
     resolution = resolve(snapshot, rendered["key"])
 

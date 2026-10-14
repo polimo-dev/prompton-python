@@ -630,6 +630,27 @@ class TestScopeGuard:
             store.current("greeting")
         assert "'staging'" in str(error.value) and "'production'" in str(error.value)
 
+    def test_a_healthy_server_without_scope_metadata_is_refused(self, tmp_path, document):
+        missing_environment = dict(document)
+        missing_environment.pop("environment")
+        transport = FakeTransport()
+        transport.push(snapshot_ok(missing_environment))
+        store = build(tmp_path, transport, project="demo", disk_cache=False)
+        store.start()
+        with pytest.raises(UseCaseDocumentUnavailableError) as error:
+            store.current("greeting")
+        assert "without an environment" in str(error.value)
+
+        missing_project = dict(document)
+        missing_project.pop("project")
+        transport = FakeTransport()
+        transport.push(snapshot_ok(missing_project))
+        store = build(tmp_path, transport, project="demo", disk_cache=False)
+        store.start()
+        with pytest.raises(UseCaseDocumentUnavailableError) as error:
+            store.current("greeting")
+        assert "without a project" in str(error.value)
+
     def test_a_good_document_clears_an_earlier_mismatch(self, tmp_path, document):
         transport = FakeTransport()
         transport.push(snapshot_ok({**document, "project": "someone-else"}))
