@@ -20,16 +20,10 @@ use_case.track(...)                  ──▶  your provider call, timed and lo
 
 ## Install
 
-Not published yet, so install from git:
+Install the v0.6.0 GitHub source release:
 
 ```sh
-pip install "prompton-sdk @ git+https://github.com/polimo-dev/prompton-python.git"
-```
-
-Once it is on PyPI:
-
-```sh
-pip install prompton-sdk
+pip install "prompton-sdk @ git+https://github.com/polimo-dev/prompton-python.git@v0.6.0"
 ```
 
 Python 3.10 or newer. **No runtime dependencies** - it uses `urllib` from the standard library.
